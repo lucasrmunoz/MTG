@@ -1,0 +1,100 @@
+"use client";
+
+import Image from "next/image";
+import { PriceControls } from "@/components/PriceControls";
+import { formatPrice, priceFor, type Finish } from "@/lib/pricing";
+import type { ArtVersion, VendorInfo } from "@/lib/types";
+
+interface ArtVersionGridProps {
+  cardName: string;
+  /** Already filtered to the current finish by the page. */
+  versions: ArtVersion[];
+  /** How many printings exist before the finish filter, for the "N of M" count. */
+  totalCount: number;
+  loading: boolean;
+  selectedUrl: string | null;
+  onSelect: (imageUrl: string) => void;
+  onHover: (imageUrl: string | null) => void;
+  vendors: VendorInfo[];
+  vendorId: string;
+  finish: Finish;
+  onVendorChange: (vendorId: string) => void;
+  onFinishChange: (finish: Finish) => void;
+}
+
+export function ArtVersionGrid({
+  cardName,
+  versions,
+  totalCount,
+  loading,
+  selectedUrl,
+  onSelect,
+  onHover,
+  vendors,
+  vendorId,
+  finish,
+  onVendorChange,
+  onFinishChange,
+}: ArtVersionGridProps) {
+  const filtered = versions.length !== totalCount;
+
+  return (
+    <div className="mt-6 pt-6 border-t border-purple/20">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+        <h3 className="text-orange font-semibold text-sm uppercase tracking-wide">
+          Art Versions ({filtered ? `${versions.length} of ${totalCount}` : versions.length})
+        </h3>
+        <PriceControls
+          vendors={vendors}
+          vendorId={vendorId}
+          finish={finish}
+          onVendorChange={onVendorChange}
+          onFinishChange={onFinishChange}
+          size="compact"
+        />
+      </div>
+
+      {loading ? (
+        <div className="flex items-center gap-2 text-foreground/60">
+          <span className="inline-block h-4 w-4 border-2 border-foreground/40 border-t-transparent rounded-full animate-spin" />
+          Loading art versions...
+        </div>
+      ) : versions.length === 0 ? (
+        <p className="text-foreground/40 text-sm py-2">
+          No printings of {cardName} exist in this finish.
+        </p>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+          {versions.map((art) => (
+            <button
+              key={art.id}
+              type="button"
+              onClick={() => onSelect(art.imageUrl)}
+              onMouseEnter={() => onHover(art.imageUrl)}
+              onMouseLeave={() => onHover(null)}
+              className={`rounded-lg border-2 p-2 transition-all cursor-pointer hover:border-orange ${
+                selectedUrl === art.imageUrl
+                  ? "border-orange bg-orange/10"
+                  : "border-foreground/10 hover:bg-surface"
+              }`}
+            >
+              <Image
+                src={art.artCropUrl ?? art.imageUrl}
+                alt={`${cardName} — ${art.setName}`}
+                width={150}
+                height={100}
+                className="rounded w-full h-auto"
+              />
+              <p className="text-xs text-purple-light mt-1 font-medium truncate">
+                {art.setName}
+              </p>
+              <p className="text-sm text-orange font-semibold">
+                {formatPrice(priceFor(art.prices, vendorId, finish))}
+              </p>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

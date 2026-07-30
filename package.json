@@ -1,0 +1,14 @@
+{
+  "name": "mtg",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Dev-time launcher. The app itself lives in src/Mtg.Api and src/frontend.",
+  "scripts": {
+    "dev": "concurrently --names api,web --prefix-colors magenta,cyan --kill-others --handle-input \"dotnet run --project src/Mtg.Api\" \"npm --prefix src/frontend run dev\"",
+    "setup": "npm install && npm --prefix src/frontend install"
+  },
+  "devDependencies": {
+    "concurrently": "10.0.4"
+  }
+}

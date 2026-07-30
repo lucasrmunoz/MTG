@@ -1,0 +1,37 @@
+{
+  "name": "mtg-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "next": "16.2.12",
+    "react": "19.2.3",
+    "react-dom": "19.2.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.1.18",
+    "@types/node": "20.19.33",
+    "@types/react": "19.2.13",
+    "@types/react-dom": "19.2.3",
+    "eslint": "9.39.2",
+    "eslint-config-next": "16.2.12",
+    "tailwindcss": "4.1.18",
+    "typescript": "5.9.3"
+  },
+  "comments": {
+    "overrides": "Forward-pins transitive dependencies of next that carry security advisories. Each is a patched version per its advisory; npm's own `audit fix` would instead downgrade next to 9.3.3. Drop an entry once next ships it directly.",
+    "postcss": "GHSA-qx2v-qp2m-jg93, GHSA-6g55-p6wh-862q, GHSA-r28c-9q8g-f849",
+    "knownUnfixed-brace-expansion": "GHSA-mh99-v99m-4gvg (DoS) is dev-only, reachable solely through eslint's glob matching. Both fixes are worse than the bug: overriding to the patched 5.0.8 breaks minimatch 3's CJS API, and eslint 10 breaks the eslint-plugin-react bundled in eslint-config-next. Recheck when eslint-config-next supports eslint 10.",
+    "knownUnfixed-sharp": "GHSA-f88m-g3jw-g9cj (libvips CVEs) affects sharp <0.35.0, which next pins as an optional dep. Not reachable here: images.unoptimized is on in next.config.ts, so next never invokes sharp to process an image. Do NOT override sharp to 0.35.x either — next declares ^0.34.5 and 0.35 changed the package exports, so it fails to load with ERR_PACKAGE_PATH_NOT_EXPORTED. Recheck when next bumps to sharp ^0.35."
+  },
+  "overrides": {
+    "postcss": "8.5.23"
+  }
+}

@@ -1,0 +1,6 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Mtg.Api/Mtg.Api.csproj" />
+    <Project Path="src/Mtg.Core/Mtg.Core.csproj" />
+  </Folder>
+</Solution>
