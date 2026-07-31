@@ -35,7 +35,7 @@ export function CardImage({ src, alt, width, height, foil, className }: CardImag
   }
 
   return (
-    <span className="foil-sheen relative">
+    <span className="foil-sheen relative block w-full">
       {image}
       <span className="absolute left-1 top-1 rounded bg-background/80 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-purple-light">
         ✨ Foil

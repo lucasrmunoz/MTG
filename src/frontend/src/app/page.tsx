@@ -141,12 +141,14 @@ export default function Home() {
         : null;
 
   return (
-    <div className="min-h-screen bg-background p-8">
+    <div className="min-h-screen bg-background p-4 sm:p-6 lg:p-8">
       <div className="mx-auto max-w-7xl">
-        <div className="flex flex-wrap items-start justify-between gap-4 mb-8">
-          <div>
-            <h1 className="text-4xl font-bold text-orange mb-1">MTG Card Lookup</h1>
-            <p className="text-purple-light text-lg">
+        <div className="flex flex-wrap items-start justify-between gap-4 mb-6 sm:mb-8">
+          <div className="min-w-0">
+            <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-orange mb-1">
+              MTG Card Lookup
+            </h1>
+            <p className="text-purple-light text-base sm:text-lg">
               Search Magic: The Gathering cards, browse every printing, and compare prices.
             </p>
           </div>
@@ -176,7 +178,7 @@ export default function Home() {
             )}
 
             {card !== null && (
-              <div className="bg-surface rounded-lg border border-purple/30 p-6">
+              <div className="bg-surface rounded-lg border border-purple/30 p-4 sm:p-6">
                 <h2 className="text-orange font-semibold text-sm uppercase tracking-wide mb-4">
                   Search Result
                 </h2>

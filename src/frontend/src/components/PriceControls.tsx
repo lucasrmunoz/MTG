@@ -26,19 +26,26 @@ export function PriceControls({
   size,
 }: PriceControlsProps) {
   const compact = size === "compact";
-  const selectClass = `bg-background border border-orange/30 rounded text-foreground focus:outline-none focus:border-orange transition-colors cursor-pointer ${
+  // min-w-0 lets the select shrink below the width of its longest option; without it the row has a
+  // ~415px intrinsic minimum, which forces phones to shrink-to-fit the whole page.
+  const selectClass = `min-w-0 flex-1 sm:flex-none bg-background border border-orange/30 rounded text-foreground focus:outline-none focus:border-orange transition-colors cursor-pointer ${
     compact ? "px-2 py-1 text-xs" : "px-3 py-2 text-sm"
   }`;
-  const labelClass = `text-orange font-semibold uppercase tracking-wide ${
+  const labelClass = `flex-shrink-0 text-orange font-semibold uppercase tracking-wide ${
     compact ? "text-[10px]" : "text-xs"
   }`;
+  const groupClass = "flex min-w-0 flex-1 items-center gap-2 sm:flex-none";
 
   const selected = vendors.find((vendor) => vendor.id === vendorId);
   const stillLoading = selected !== undefined && !selected.loaded;
 
   return (
-    <div className={`flex items-center ${compact ? "gap-3" : "gap-5"}`}>
-      <div className="flex items-center gap-2">
+    <div
+      className={`flex w-full flex-wrap items-center sm:w-auto ${
+        compact ? "gap-x-3 gap-y-2" : "gap-x-5 gap-y-2"
+      }`}
+    >
+      <div className={groupClass}>
         <label className={labelClass} htmlFor={`vendor-${size}`}>
           Prices
         </label>
@@ -57,7 +64,7 @@ export function PriceControls({
         </select>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className={groupClass}>
         <label className={labelClass} htmlFor={`finish-${size}`}>
           Finish
         </label>

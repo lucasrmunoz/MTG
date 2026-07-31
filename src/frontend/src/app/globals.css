@@ -46,9 +46,10 @@ body {
   }
 }
 
+/* Display is left to the component so the wrapper can be a full-width block when the card image
+   is sized responsively. */
 .foil-sheen {
   position: relative;
-  display: inline-block;
   overflow: hidden;
   border-radius: 0.5rem;
 }

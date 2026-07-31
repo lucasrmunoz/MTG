@@ -38,10 +38,10 @@ export function CardDetail({
   const price = priceFor(card.prices, vendorId, finish);
 
   return (
-    <div className="flex flex-col md:flex-row gap-8">
-      <div className="flex-shrink-0">
+    <div className="flex flex-col md:flex-row gap-6 md:gap-8">
+      <div className="w-full max-w-[300px] flex-shrink-0">
         {imageUrl === null ? (
-          <div className="w-[300px] h-[418px] bg-background/50 rounded-lg flex items-center justify-center border border-foreground/10">
+          <div className="aspect-[300/418] w-full bg-background/50 rounded-lg flex items-center justify-center border border-foreground/10">
             <span className="text-foreground/40 text-sm">No image available</span>
           </div>
         ) : (
@@ -51,7 +51,7 @@ export function CardDetail({
             width={300}
             height={418}
             foil={showFoil}
-            className="rounded-lg"
+            className="rounded-lg w-full h-auto"
           />
         )}
       </div>
