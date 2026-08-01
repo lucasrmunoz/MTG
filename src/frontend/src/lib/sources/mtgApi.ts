@@ -6,7 +6,7 @@
  */
 
 import { ApiError } from "@/lib/errors";
-import type { ArtVersion, Card, VendorInfo } from "@/lib/types";
+import type { ArtVersion, CardSearchResult, VendorInfo } from "@/lib/types";
 
 /** RFC 9457 problem details, which is how Mtg.Api reports every failure. */
 interface ProblemDetails {
@@ -45,8 +45,8 @@ function createClient(baseUrl: string) {
   }
 
   return {
-    searchCard: (name: string) =>
-      getJson<Card>(`/api/cards/search?name=${encodeURIComponent(name)}`),
+    searchCards: (name: string) =>
+      getJson<CardSearchResult>(`/api/cards/search?name=${encodeURIComponent(name)}`),
 
     fetchArtVersions: (name: string) =>
       getJson<ArtVersion[]>(`/api/cards/art?name=${encodeURIComponent(name)}`),

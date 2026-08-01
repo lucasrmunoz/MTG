@@ -25,20 +25,110 @@ public sealed class ScryfallClient(HttpClient httpClient, ILogger<ScryfallClient
     private const int MaxArtPages = 10;
 
     /// <summary>
-    /// Finds a single card by name, tolerating misspellings and partial names.
+    /// Finds every card whose name contains the search term.
     /// </summary>
-    /// <param name="cardName">Card name to search for, e.g. "lightning bolt" or "snapcastr".</param>
+    /// <remarks>
+    /// Each whitespace-separated word must appear somewhere in the name, in any order: "bolt light"
+    /// and "light bolt" both find Lightning Bolt. Scryfall's <c>name:</c> operator matches inside
+    /// words too, so "olt" finds Aether Revolt. Only the first page of results is returned —
+    /// <see cref="CardSearchResult.TotalMatches"/> reports how many there were altogether.
+    /// <para>
+    /// A term that no name contains falls back to Scryfall's fuzzy lookup, which tolerates
+    /// misspellings a substring match cannot.
+    /// </para>
+    /// </remarks>
+    /// <param name="searchTerm">Whole or partial card name, e.g. "lightning bolt" or "bolt".</param>
     /// <param name="cancellationToken">Cancels the outbound request.</param>
-    /// <returns>The matching card, or null if Scryfall knows no card by that name.</returns>
+    /// <returns>Matching cards, closest match first; empty when nothing matches.</returns>
     /// <exception cref="ScryfallException">Scryfall was unreachable or returned an unusable response.</exception>
-    public async Task<Card?> FindCardByNameAsync(string cardName, CancellationToken cancellationToken = default)
+    public async Task<CardSearchResult> SearchCardsByNameAsync(
+        string searchTerm,
+        CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(cardName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(searchTerm);
 
-        var url = $"cards/named?fuzzy={Uri.EscapeDataString(cardName)}";
-        var card = await GetAsync<ScryfallCard>(url, $"card lookup for '{cardName}'", cancellationToken);
+        var nameQuery = BuildNameQuery(searchTerm);
+        if (nameQuery is null)
+        {
+            return CardSearchResult.Empty;
+        }
 
-        return card is null ? null : ScryfallCardMapper.ToCard(card);
+        var url = $"cards/search?q={Uri.EscapeDataString(nameQuery)}&unique=cards&order=name&dir=asc";
+
+        // A 404 here means no card name contains the term, which is an empty page, not a failure.
+        var result = await GetAsync<ScryfallList>(url, $"card search for '{searchTerm}'", cancellationToken);
+        if (result?.Data is not { Count: > 0 } matches)
+        {
+            return await FindByFuzzyNameAsync(searchTerm, cancellationToken);
+        }
+
+        var cards = matches
+            .Select(ScryfallCardMapper.ToCard)
+            .OrderBy(card => MatchRank(card.Name, searchTerm.Trim()))
+            .ThenBy(card => card.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return new CardSearchResult { Cards = cards, TotalMatches = result.TotalCards };
+    }
+
+    /// <summary>
+    /// Scryfall's fuzzy name lookup, which tolerates misspellings — "snapcastr mage" finds
+    /// Snapcaster Mage — where a substring match finds nothing at all.
+    /// </summary>
+    /// <remarks>
+    /// Only reached when the substring search came back empty, so it costs a second request on the
+    /// rare path rather than on every search. Scryfall answers 404 both when nothing resembles the
+    /// term and when too many cards do; either way there is no single card to offer.
+    /// </remarks>
+    private async Task<CardSearchResult> FindByFuzzyNameAsync(
+        string searchTerm,
+        CancellationToken cancellationToken)
+    {
+        await Task.Delay(PageDelay, cancellationToken);
+
+        var url = $"cards/named?fuzzy={Uri.EscapeDataString(searchTerm)}";
+        var card = await GetAsync<ScryfallCard>(url, $"fuzzy card lookup for '{searchTerm}'", cancellationToken);
+
+        return card is null
+            ? CardSearchResult.Empty
+            : new CardSearchResult { Cards = [ScryfallCardMapper.ToCard(card)], TotalMatches = 1 };
+    }
+
+    /// <summary>
+    /// Turns a search term into a Scryfall query of ANDed <c>name:</c> clauses, one per word.
+    /// </summary>
+    /// <remarks>
+    /// Each word is quoted so that punctuation carries through — <c>name:"Urza's"</c> works, and a
+    /// leading hyphen is read as part of the name rather than as Scryfall's negation operator.
+    /// Quotes and backslashes are stripped instead of escaped, because Scryfall's query parser has
+    /// no escape sequence for them inside a quoted string.
+    /// </remarks>
+    /// <returns>The query, or null when the term holds nothing searchable.</returns>
+    private static string? BuildNameQuery(string searchTerm)
+    {
+        var clauses = searchTerm
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(word => word.Replace("\"", "", StringComparison.Ordinal)
+                                .Replace("\\", "", StringComparison.Ordinal))
+            .Where(word => word.Length > 0)
+            .Select(word => $"name:\"{word}\"")
+            .ToList();
+
+        return clauses.Count == 0 ? null : string.Join(' ', clauses);
+    }
+
+    /// <summary>
+    /// Orders matches by how closely the whole name tracks the term, so that searching the full
+    /// name of a card puts that card first instead of alphabetically among its partial matches.
+    /// </summary>
+    private static int MatchRank(string cardName, string searchTerm)
+    {
+        if (cardName.Equals(searchTerm, StringComparison.OrdinalIgnoreCase))
+        {
+            return 0;
+        }
+
+        return cardName.StartsWith(searchTerm, StringComparison.OrdinalIgnoreCase) ? 1 : 2;
     }
 
     /// <summary>

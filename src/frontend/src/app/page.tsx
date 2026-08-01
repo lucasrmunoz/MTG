@@ -6,18 +6,23 @@ import { CardDetail } from "@/components/CardDetail";
 import { PreviewPanel } from "@/components/PreviewPanel";
 import { PriceControls } from "@/components/PriceControls";
 import { SearchForm } from "@/components/SearchForm";
-import { fetchArtVersions, fetchVendors, searchCard } from "@/lib/api";
+import { SearchResults } from "@/components/SearchResults";
+import { fetchArtVersions, fetchVendors, searchCards } from "@/lib/api";
 import { matchesFinish, priceFor, type Finish } from "@/lib/pricing";
-import type { ArtVersion, Card, VendorInfo } from "@/lib/types";
+import type { ArtVersion, Card, CardSearchResult, VendorInfo } from "@/lib/types";
 
 /** How often to re-check whether the cached vendor catalogue has finished downloading. */
 const VENDOR_POLL_MS = 10_000;
 
 export default function Home() {
   const [query, setQuery] = useState("");
+  const [results, setResults] = useState<CardSearchResult | null>(null);
   const [card, setCard] = useState<Card | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  /** The term the current results belong to, so the empty state can quote it back. */
+  const [searchedTerm, setSearchedTerm] = useState<string | null>(null);
 
   const [artVersions, setArtVersions] = useState<ArtVersion[]>([]);
   const [loadingArt, setLoadingArt] = useState(false);
@@ -28,8 +33,8 @@ export default function Home() {
   const [vendorId, setVendorId] = useState("");
   const [finish, setFinish] = useState<Finish>("all");
 
-  // Identifies the in-flight search so a slow response from an earlier query cannot overwrite
-  // the results of a later one.
+  // Identifies the in-flight search or card selection, so a slow response from an earlier one
+  // cannot overwrite the results of a later one.
   const requestIdRef = useRef(0);
 
   // Card Kingdom publishes no per-card endpoint, so its catalogue is downloaded in the background
@@ -69,44 +74,19 @@ export default function Home() {
     };
   }, []);
 
-  async function handleSearch() {
-    const name = query.trim();
-    if (name === "") {
-      return;
-    }
-
+  /** Opens one card from the match list and loads its printings. */
+  async function selectCard(chosen: Card) {
     const requestId = ++requestIdRef.current;
     const isCurrent = () => requestId === requestIdRef.current;
 
-    setLoading(true);
-    setError(null);
-    setCard(null);
-    setArtVersions([]);
-    setSelectedArtUrl(null);
+    setCard(chosen);
+    setSelectedArtUrl(chosen.imageUrl);
     setHoveredArtUrl(null);
-
-    let found: Card;
-    try {
-      found = await searchCard(name);
-    } catch (err) {
-      if (isCurrent()) {
-        setError(err instanceof Error ? err.message : "Something went wrong.");
-        setLoading(false);
-      }
-      return;
-    }
-
-    if (!isCurrent()) {
-      return;
-    }
-
-    setCard(found);
-    setSelectedArtUrl(found.imageUrl);
-    setLoading(false);
+    setArtVersions([]);
     setLoadingArt(true);
 
     try {
-      const versions = await fetchArtVersions(found.name);
+      const versions = await fetchArtVersions(chosen.name);
       if (isCurrent()) {
         setArtVersions(versions);
       }
@@ -119,6 +99,53 @@ export default function Home() {
       if (isCurrent()) {
         setLoadingArt(false);
       }
+    }
+  }
+
+  async function handleSearch() {
+    const name = query.trim();
+    if (name === "") {
+      return;
+    }
+
+    const requestId = ++requestIdRef.current;
+    const isCurrent = () => requestId === requestIdRef.current;
+
+    setLoading(true);
+    setError(null);
+    setResults(null);
+    setSearchedTerm(null);
+    setCard(null);
+    setArtVersions([]);
+    // A card selection may still be loading art; that response is discarded by the id check, so
+    // the flag it would otherwise have cleared has to be reset here.
+    setLoadingArt(false);
+    setSelectedArtUrl(null);
+    setHoveredArtUrl(null);
+
+    let found: CardSearchResult;
+    try {
+      found = await searchCards(name);
+    } catch (err) {
+      if (isCurrent()) {
+        setError(err instanceof Error ? err.message : "Something went wrong.");
+        setLoading(false);
+      }
+      return;
+    }
+
+    if (!isCurrent()) {
+      return;
+    }
+
+    setResults(found);
+    setSearchedTerm(name);
+    setLoading(false);
+
+    // A single match is unambiguous, so skip the pick-list and open it straight away.
+    const only = found.cards.length === 1 ? found.cards[0] : undefined;
+    if (only !== undefined) {
+      void selectCard(only);
     }
   }
 
@@ -177,10 +204,28 @@ export default function Home() {
               </div>
             )}
 
+            {searchedTerm !== null && results?.cards.length === 0 && (
+              <div className="bg-surface rounded-lg border border-purple/30 p-4 sm:p-6 mb-6 sm:mb-8 text-foreground/60">
+                No card name contains &ldquo;{searchedTerm}&rdquo;. Check the spelling, or try a
+                shorter piece of the name.
+              </div>
+            )}
+
+            {results !== null && results.cards.length > 1 && (
+              <SearchResults
+                cards={results.cards}
+                totalMatches={results.totalMatches}
+                selectedId={card?.id ?? null}
+                vendorId={vendorId}
+                finish={finish}
+                onSelect={(chosen) => void selectCard(chosen)}
+              />
+            )}
+
             {card !== null && (
               <div className="bg-surface rounded-lg border border-purple/30 p-4 sm:p-6">
                 <h2 className="text-orange font-semibold text-sm uppercase tracking-wide mb-4">
-                  Search Result
+                  Selected Card
                 </h2>
 
                 <CardDetail

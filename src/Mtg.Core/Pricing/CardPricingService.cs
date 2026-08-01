@@ -16,11 +16,20 @@ public sealed class CardPricingService(
     IEnumerable<ILivePriceSource> liveSources,
     ILogger<CardPricingService> logger)
 {
-    public async Task<Card> EnrichAsync(Card card, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<Card>> EnrichAsync(
+        IReadOnlyList<Card> cards,
+        CancellationToken cancellationToken)
     {
-        var live = await FetchLiveAsync([card.Id], cancellationToken);
+        if (cards.Count == 0)
+        {
+            return cards;
+        }
 
-        return card with { Prices = Combine(card.Prices, card.Id, live) };
+        var live = await FetchLiveAsync([.. cards.Select(card => card.Id)], cancellationToken);
+
+        return cards
+            .Select(card => card with { Prices = Combine(card.Prices, card.Id, live) })
+            .ToList();
     }
 
     public async Task<IReadOnlyList<ArtVersion>> EnrichAsync(

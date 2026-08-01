@@ -21,8 +21,8 @@ const source =
 /** True when running against Scryfall directly, so only TCGplayer prices exist. */
 export const usingDirectScryfall = apiBaseUrl === undefined || apiBaseUrl === "";
 
-/** Finds one card by name, tolerating misspellings. */
-export const searchCard = source.searchCard;
+/** Finds every card whose name contains the search term, best match first. */
+export const searchCards = source.searchCards;
 
 /** Lists every printing of a card with distinct artwork, oldest first. */
 export const fetchArtVersions = source.fetchArtVersions;

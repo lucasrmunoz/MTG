@@ -55,6 +55,18 @@ export interface Card {
   faces: CardFace[];
 }
 
+/**
+ * The cards whose name contains a search term.
+ *
+ * `totalMatches` can exceed `cards.length`: a short term matches thousands of cards and only the
+ * first page comes back, so the UI can say how much it is not showing.
+ */
+export interface CardSearchResult {
+  /** Matching cards, best match first. One entry per card, not per printing. */
+  cards: Card[];
+  totalMatches: number;
+}
+
 export interface ArtVersion {
   id: string;
   setCode: string;

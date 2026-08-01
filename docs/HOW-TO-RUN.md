@@ -73,14 +73,26 @@ yet.
 curl "http://localhost:5000/api/cards/search?name=Lightning%20Bolt"
 curl "http://localhost:5000/api/cards/art?name=Lightning%20Bolt"
 
-# Fuzzy matching
+# Partial name — 41 matches, exact name first
+curl "http://localhost:5000/api/cards/search?name=bolt"
+
+# Words in any order
+curl "http://localhost:5000/api/cards/search?name=bolt%20light"
+
+# More matches than one page — totalMatches 25818, cards 175
+curl "http://localhost:5000/api/cards/search?name=a"
+
+# Misspelling — no name contains it, so it falls back to fuzzy matching
 curl "http://localhost:5000/api/cards/search?name=snapcastr%20mage"
 
 # Double-faced card — returns an image plus both faces
 curl "http://localhost:5000/api/cards/search?name=Delver%20of%20Secrets"
 
-# Unknown card — 404 problem details
+# Unknown card — 200 with an empty cards array
 curl "http://localhost:5000/api/cards/search?name=asdfqwerzxcv"
+
+# Missing name — 400 problem details
+curl "http://localhost:5000/api/cards/search"
 ```
 
 ## Building the hosted (static) version

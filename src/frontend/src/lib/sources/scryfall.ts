@@ -10,7 +10,14 @@
  */
 
 import { ApiError } from "@/lib/errors";
-import type { ArtVersion, Card, CardFace, VendorInfo, VendorPrice } from "@/lib/types";
+import type {
+  ArtVersion,
+  Card,
+  CardFace,
+  CardSearchResult,
+  VendorInfo,
+  VendorPrice,
+} from "@/lib/types";
 
 const SCRYFALL = "https://api.scryfall.com";
 
@@ -61,6 +68,7 @@ interface ScryfallCard {
 }
 
 interface ScryfallList {
+  total_cards?: number;
   has_more?: boolean;
   next_page?: string;
   data?: ScryfallCard[];
@@ -181,9 +189,106 @@ function toArtVersion(source: ScryfallCard): ArtVersion | null {
   };
 }
 
-export function searchCard(name: string): Promise<Card> {
+/**
+ * Turns a search term into a Scryfall query of ANDed `name:` clauses, one per word.
+ *
+ * Each word is quoted so punctuation carries through — `name:"Urza's"` works, and a leading hyphen
+ * reads as part of the name rather than as Scryfall's negation operator. Quotes and backslashes are
+ * stripped instead of escaped: Scryfall's parser has no escape sequence for them inside quotes.
+ *
+ * Returns null when the term holds nothing searchable. Mirrors ScryfallClient.BuildNameQuery.
+ */
+function buildNameQuery(term: string): string | null {
+  const clauses = term
+    .split(/\s+/)
+    .map((word) => word.replaceAll('"', "").replaceAll("\\", ""))
+    .filter((word) => word !== "")
+    .map((word) => `name:"${word}"`);
+
+  return clauses.length === 0 ? null : clauses.join(" ");
+}
+
+/**
+ * Orders matches by how closely the whole name tracks the term, so searching a card's full name
+ * puts that card first rather than alphabetically among its partial matches.
+ */
+function matchRank(cardName: string, term: string): number {
+  const name = cardName.toLowerCase();
+  const wanted = term.toLowerCase();
+
+  if (name === wanted) {
+    return 0;
+  }
+
+  return name.startsWith(wanted) ? 1 : 2;
+}
+
+/**
+ * Scryfall's fuzzy name lookup, which tolerates misspellings — "snapcastr mage" finds Snapcaster
+ * Mage — where a substring match finds nothing at all.
+ *
+ * Scryfall answers 404 both when nothing resembles the term and when too many cards do; either way
+ * there is no single card to offer.
+ */
+async function findByFuzzyName(name: string): Promise<CardSearchResult> {
+  await new Promise((resolve) => setTimeout(resolve, PAGE_DELAY_MS));
+
   const url = `${SCRYFALL}/cards/named?fuzzy=${encodeURIComponent(name)}`;
-  return getJson<ScryfallCard>(url, `card lookup for '${name}'`).then(toCard);
+
+  try {
+    const card = await getJson<ScryfallCard>(url, `fuzzy card lookup for '${name}'`);
+    return { cards: [toCard(card)], totalMatches: 1 };
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) {
+      return { cards: [], totalMatches: 0 };
+    }
+    throw err;
+  }
+}
+
+/**
+ * Finds every card whose name contains the term.
+ *
+ * Each whitespace-separated word must appear somewhere in the name, in any order: "bolt light" and
+ * "light bolt" both find Lightning Bolt. `name:` matches inside words too, so "olt" finds Aether
+ * Revolt. Only the first page comes back; `totalMatches` says how many there were altogether.
+ *
+ * A term that no name contains falls back to fuzzy matching. Mirrors ScryfallClient.
+ */
+export async function searchCards(name: string): Promise<CardSearchResult> {
+  const query = buildNameQuery(name);
+  if (query === null) {
+    return { cards: [], totalMatches: 0 };
+  }
+
+  const url = `${SCRYFALL}/cards/search?q=${encodeURIComponent(query)}&unique=cards&order=name&dir=asc`;
+
+  let result: ScryfallList;
+  try {
+    result = await getJson<ScryfallList>(url, `card search for '${name}'`);
+  } catch (err) {
+    // A 404 means no card name contains the term, which is an empty page, not a failure.
+    if (err instanceof ApiError && err.status === 404) {
+      return findByFuzzyName(name);
+    }
+    throw err;
+  }
+
+  const matches = result.data ?? [];
+  if (matches.length === 0) {
+    return findByFuzzyName(name);
+  }
+
+  const term = name.trim();
+  const cards = matches
+    .map(toCard)
+    .sort(
+      (left, right) =>
+        matchRank(left.name, term) - matchRank(right.name, term) ||
+        left.name.localeCompare(right.name),
+    );
+
+  return { cards, totalMatches: result.total_cards ?? cards.length };
 }
 
 export async function fetchArtVersions(name: string): Promise<ArtVersion[]> {

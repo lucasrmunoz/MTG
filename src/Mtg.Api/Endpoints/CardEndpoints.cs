@@ -15,8 +15,8 @@ internal static class CardEndpoints
         var cards = app.MapGroup("/api/cards").WithTags("Cards");
 
         cards.MapGet("/search", SearchAsync)
-            .WithName("SearchCard")
-            .WithSummary("Finds one card by name, tolerating misspellings.");
+            .WithName("SearchCards")
+            .WithSummary("Finds every card whose name contains the search term.");
 
         cards.MapGet("/art", GetArtVersionsAsync)
             .WithName("GetCardArt")
@@ -32,7 +32,9 @@ internal static class CardEndpoints
 
     // 'name' is nullable so that omitting it entirely fails validation here with a 400, rather
     // than throwing during parameter binding and surfacing as a 500.
-    private static async Task<Results<Ok<Card>, ProblemHttpResult>> SearchAsync(
+    // A term that matches no card is an empty result rather than a 404: this is a list endpoint,
+    // and "nothing contains that text" is an answer, not a missing resource.
+    private static async Task<Results<Ok<CardSearchResult>, ProblemHttpResult>> SearchAsync(
         string? name,
         ScryfallClient scryfall,
         CardPricingService pricing,
@@ -43,17 +45,12 @@ internal static class CardEndpoints
             return MissingName();
         }
 
-        var card = await scryfall.FindCardByNameAsync(name, cancellationToken);
+        var result = await scryfall.SearchCardsByNameAsync(name, cancellationToken);
 
-        if (card is null)
+        return TypedResults.Ok(result with
         {
-            return TypedResults.Problem(
-                detail: $"No card matches '{name}'. Check the spelling and try again.",
-                statusCode: StatusCodes.Status404NotFound,
-                title: "Card not found");
-        }
-
-        return TypedResults.Ok(await pricing.EnrichAsync(card, cancellationToken));
+            Cards = await pricing.EnrichAsync(result.Cards, cancellationToken),
+        });
     }
 
     private static async Task<Results<Ok<IReadOnlyList<ArtVersion>>, ProblemHttpResult>> GetArtVersionsAsync(

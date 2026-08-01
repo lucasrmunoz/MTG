@@ -5,7 +5,10 @@ vendors. Card data comes from the [Scryfall API](https://scryfall.com/docs/api).
 
 ## What it does
 
-- Search any card by name, tolerating misspellings — "snapcastr mage" finds Snapcaster Mage.
+- Search on part of a name and pick from the matches — "bolt" lists all 41 cards with it in the
+  name, in any word order, and matching inside words too ("olt" finds Aether Revolt).
+- Misspellings still land: a term no name contains falls back to fuzzy matching, so "snapcastr mage"
+  finds Snapcaster Mage.
 - See the full card: type line, mana cost, power/toughness or loyalty, keywords, oracle text, and
   which set and rarity the printing is.
 - Browse every printing of that card that uses distinct artwork, oldest first, and pick one.
@@ -18,13 +21,14 @@ vendors. Card data comes from the [Scryfall API](https://scryfall.com/docs/api).
 MTG.slnx
 src/
   Mtg.Core/          Class library — card models and the Scryfall client
-    Models/          Card, CardFace, ArtVersion
+    Models/          Card, CardFace, ArtVersion, CardSearchResult
     Scryfall/        ScryfallClient, wire DTOs, mapper
   Mtg.Api/           ASP.NET Core minimal API
     Endpoints/       Card lookup endpoints
   frontend/          Next.js app (App Router, Tailwind v4)
     src/lib/         API client, pricing helpers, card helpers
-    src/components/  SearchForm, CardDetail, ArtVersionGrid, PreviewPanel, PriceControls
+    src/components/  SearchForm, SearchResults, CardDetail, ArtVersionGrid, PreviewPanel,
+                     PriceControls
 docs/
   HOW-TO-RUN.md
 ```
@@ -39,12 +43,16 @@ details.
 
 | Method | Route | Returns |
 |---|---|---|
-| `GET` | `/api/cards/search?name=` | `200` the card · `404` no such card · `400` missing `name` |
+| `GET` | `/api/cards/search?name=` | `200` matching cards and a total count, empty when nothing matches · `400` missing `name` |
 | `GET` | `/api/cards/art?name=` | `200` art versions, empty array when the name matches nothing |
 | `GET` | `/api/vendors` | `200` price vendors, their price basis, and whether each feed has loaded |
 
+Search returns `{ "cards": [...], "totalMatches": n }`. `totalMatches` can exceed `cards.length` —
+Scryfall pages at 175, and "a" matches over 25,000 cards — so the UI can say what it is not showing
+rather than truncating silently.
+
 When Scryfall itself is unreachable, both return `502` with a problem detail saying so — distinct from
-a `404` meaning the card genuinely does not exist.
+an empty result meaning no card name matches.
 
 The OpenAPI document is served at `/openapi/v1.json` in Development.
 
