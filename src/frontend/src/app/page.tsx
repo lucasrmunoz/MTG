@@ -191,6 +191,16 @@ export default function Home() {
     void selectCard(drawn);
   }
 
+  /** Closes the open card and returns to the match grid, discarding any in-flight art load. */
+  function backToResults() {
+    requestIdRef.current++;
+    setCard(null);
+    setArtVersions([]);
+    setLoadingArt(false);
+    setSelectedArtUrl(null);
+    setHoveredArtUrl(null);
+  }
+
   const visibleVersions = artVersions.filter((version) =>
     matchesFinish(version.finishes, finish),
   );
@@ -258,11 +268,10 @@ export default function Home() {
               </div>
             )}
 
-            {results !== null && results.cards.length > 1 && (
+            {card === null && results !== null && results.cards.length > 1 && (
               <SearchResults
                 cards={results.cards}
                 totalMatches={results.totalMatches}
-                selectedId={card?.id ?? null}
                 vendorId={vendorId}
                 finish={finish}
                 onSelect={(chosen) => void selectCard(chosen)}
@@ -271,9 +280,20 @@ export default function Home() {
 
             {card !== null && (
               <div className="bg-surface rounded-lg border border-purple/30 p-4 sm:p-6">
-                <h2 className="text-orange font-semibold text-sm uppercase tracking-wide mb-4">
-                  Selected Card
-                </h2>
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                  <h2 className="text-orange font-semibold text-sm uppercase tracking-wide">
+                    Selected Card
+                  </h2>
+                  {results !== null && results.cards.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={backToResults}
+                      className="bg-background border border-orange/30 hover:border-orange text-foreground font-semibold px-4 py-2 rounded text-sm transition-colors cursor-pointer"
+                    >
+                      ← Back to matches ({results.cards.length})
+                    </button>
+                  )}
+                </div>
 
                 <CardDetail
                   card={card}

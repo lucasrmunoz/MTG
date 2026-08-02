@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { formatPrice, priceFor, type Finish } from "@/lib/pricing";
 import type { Card } from "@/lib/types";
 
@@ -7,23 +8,22 @@ interface SearchResultsProps {
   cards: Card[];
   /** How many cards matched overall; larger than cards.length when Scryfall had further pages. */
   totalMatches: number;
-  /** The card currently open below, so the list can show which one that is. */
-  selectedId: string | null;
   vendorId: string;
   finish: Finish;
   onSelect: (card: Card) => void;
 }
 
 /**
- * The pick-list for a partial-name search.
+ * The match grid for a partial-name search: one image per distinct card, not per printing.
  *
- * Prices here are for the printing Scryfall returns as the card's default. Picking a card opens it
- * below, where every printing's own price is listed.
+ * Picking a card replaces this grid with the card's detail and art versions; the page brings the
+ * grid back through its "back to matches" button. Prices are for the printing Scryfall returns as
+ * the card's default. The grid scrolls inside a fixed height so a broad search stays manageable —
+ * images load lazily, so off-screen matches cost nothing until scrolled to.
  */
 export function SearchResults({
   cards,
   totalMatches,
-  selectedId,
   vendorId,
   finish,
   onSelect,
@@ -45,32 +45,35 @@ export function SearchResults({
           : "Pick a card to see its printings and prices."}
       </p>
 
-      <ul className="max-h-96 overflow-y-auto divide-y divide-foreground/10">
-        {cards.map((card) => (
-          <li key={card.id}>
+      <div className="max-h-[36rem] overflow-y-auto">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+          {cards.map((card) => (
             <button
+              key={card.id}
               type="button"
               onClick={() => onSelect(card)}
-              className={`w-full flex items-baseline justify-between gap-4 px-3 py-2 text-left transition-colors cursor-pointer ${
-                selectedId === card.id ? "bg-orange/10" : "hover:bg-background/60"
-              }`}
+              className="rounded-lg border-2 border-foreground/10 p-2 text-left transition-all cursor-pointer hover:border-orange hover:bg-background/60"
             >
-              {/* min-w-0 lets the long type line truncate instead of pushing the price off. */}
-              <span className="min-w-0">
-                <span className="block truncate font-medium text-purple-light">
-                  {card.name}
-                </span>
-                <span className="block truncate text-sm text-foreground/50">
-                  {card.typeLine} · {card.setName} ({card.setCode.toUpperCase()})
-                </span>
-              </span>
-              <span className="flex-shrink-0 text-orange font-semibold">
+              {card.imageUrl === null ? (
+                <div className="aspect-[488/680] w-full bg-background/50 rounded flex items-center justify-center p-2">
+                  <span className="text-foreground/60 text-sm text-center">{card.name}</span>
+                </div>
+              ) : (
+                <Image
+                  src={card.imageUrl}
+                  alt={card.name}
+                  width={244}
+                  height={340}
+                  className="rounded w-full h-auto"
+                />
+              )}
+              <p className="text-sm text-orange font-semibold mt-1">
                 {formatPrice(priceFor(card.prices, vendorId, finish))}
-              </span>
+              </p>
             </button>
-          </li>
-        ))}
-      </ul>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
