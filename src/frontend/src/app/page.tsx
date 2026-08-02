@@ -3,11 +3,14 @@
 import { useEffect, useRef, useState } from "react";
 import { ArtVersionGrid } from "@/components/ArtVersionGrid";
 import { CardDetail } from "@/components/CardDetail";
+import { KeywordsSection } from "@/components/KeywordsSection";
 import { PreviewPanel } from "@/components/PreviewPanel";
 import { PriceControls } from "@/components/PriceControls";
+import { RandomCardControls } from "@/components/RandomCardControls";
 import { SearchForm } from "@/components/SearchForm";
 import { SearchResults } from "@/components/SearchResults";
-import { fetchArtVersions, fetchVendors, searchCards } from "@/lib/api";
+import { fetchArtVersions, fetchRandomCard, fetchVendors, searchCards } from "@/lib/api";
+import type { ColorMatchMode } from "@/lib/colors";
 import { matchesFinish, priceFor, type Finish } from "@/lib/pricing";
 import type { ArtVersion, Card, CardSearchResult, VendorInfo } from "@/lib/types";
 
@@ -19,6 +22,7 @@ export default function Home() {
   const [results, setResults] = useState<CardSearchResult | null>(null);
   const [card, setCard] = useState<Card | null>(null);
   const [loading, setLoading] = useState(false);
+  const [randomLoading, setRandomLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   /** The term the current results belong to, so the empty state can quote it back. */
@@ -117,9 +121,10 @@ export default function Home() {
     setSearchedTerm(null);
     setCard(null);
     setArtVersions([]);
-    // A card selection may still be loading art; that response is discarded by the id check, so
-    // the flag it would otherwise have cleared has to be reset here.
+    // A card selection may still be loading art, or a random card may still be drawing; those
+    // responses are discarded by the id check, so the flags they would have cleared reset here.
     setLoadingArt(false);
+    setRandomLoading(false);
     setSelectedArtUrl(null);
     setHoveredArtUrl(null);
 
@@ -147,6 +152,43 @@ export default function Home() {
     if (only !== undefined) {
       void selectCard(only);
     }
+  }
+
+  /** Draws one random card, optionally color-filtered, and opens it like a picked search result. */
+  async function handleRandomCard(colors: string[], mode: ColorMatchMode) {
+    const requestId = ++requestIdRef.current;
+    const isCurrent = () => requestId === requestIdRef.current;
+
+    setRandomLoading(true);
+    setError(null);
+    setResults(null);
+    setSearchedTerm(null);
+    setCard(null);
+    setArtVersions([]);
+    // Mirrors handleSearch: an interrupted search or art load never clears its own flag, because
+    // the id check discards its response.
+    setLoading(false);
+    setLoadingArt(false);
+    setSelectedArtUrl(null);
+    setHoveredArtUrl(null);
+
+    let drawn: Card;
+    try {
+      drawn = await fetchRandomCard(colors, mode);
+    } catch (err) {
+      if (isCurrent()) {
+        setError(err instanceof Error ? err.message : "Something went wrong.");
+        setRandomLoading(false);
+      }
+      return;
+    }
+
+    if (!isCurrent()) {
+      return;
+    }
+
+    setRandomLoading(false);
+    void selectCard(drawn);
   }
 
   const visibleVersions = artVersions.filter((version) =>
@@ -196,6 +238,11 @@ export default function Home() {
               loading={loading}
               onChange={setQuery}
               onSubmit={handleSearch}
+            />
+
+            <RandomCardControls
+              loading={randomLoading}
+              onRandom={(colors, mode) => void handleRandomCard(colors, mode)}
             />
 
             {error !== null && (
@@ -267,6 +314,10 @@ export default function Home() {
               finish={finish}
             />
           </div>
+        </div>
+
+        <div className="mt-6 sm:mt-8">
+          <KeywordsSection />
         </div>
       </div>
     </div>

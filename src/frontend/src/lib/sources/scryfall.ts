@@ -9,6 +9,7 @@
  * The mapping here mirrors Mtg.Core's ScryfallCardMapper. Keep the two in step.
  */
 
+import type { ColorMatchMode } from "@/lib/colors";
 import { ApiError } from "@/lib/errors";
 import type {
   ArtVersion,
@@ -289,6 +290,29 @@ export async function searchCards(name: string): Promise<CardSearchResult> {
     );
 
   return { cards, totalMatches: result.total_cards ?? cards.length };
+}
+
+/**
+ * A single random card, optionally constrained by color.
+ *
+ * With no colors selected the whole card pool is fair game. Otherwise the selection becomes a
+ * Scryfall color query: "only" means no colors outside the selection (`c<=`, so subsets and
+ * colorless qualify), "contains" means every selected color is present (`c>=`).
+ */
+export async function fetchRandomCard(
+  colors: string[],
+  mode: ColorMatchMode,
+): Promise<Card> {
+  let url = `${SCRYFALL}/cards/random`;
+
+  if (colors.length > 0) {
+    const operator = mode === "only" ? "<=" : ">=";
+    const query = `color${operator}${colors.join("").toLowerCase()}`;
+    url += `?q=${encodeURIComponent(query)}`;
+  }
+
+  const card = await getJson<ScryfallCard>(url, "random card lookup");
+  return toCard(card);
 }
 
 export async function fetchArtVersions(name: string): Promise<ArtVersion[]> {

@@ -30,4 +30,11 @@ export const fetchArtVersions = source.fetchArtVersions;
 /** Lists price vendors and whether each one's data is live. */
 export const fetchVendors = source.fetchVendors;
 
+/**
+ * A random card, optionally constrained by color. Always answered by Scryfall directly — its
+ * random endpoint is CORS-open in every mode, and Mtg.Api publishes no random-card route — so in
+ * API mode the card carries TCGplayer prices only.
+ */
+export const fetchRandomCard = scryfall.fetchRandomCard;
+
 export { ApiError } from "@/lib/errors";
