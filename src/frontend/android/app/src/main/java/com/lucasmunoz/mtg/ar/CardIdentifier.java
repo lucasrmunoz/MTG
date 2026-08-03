@@ -40,9 +40,6 @@ final class CardIdentifier {
     /** How often to OCR a frame; more brings no benefit at hand-held steadiness. */
     private static final long ATTEMPT_INTERVAL_MS = 700;
 
-    /** The slower cadence once a card is active, when scanning only watches for a switch. */
-    private static final long RELAXED_INTERVAL_MS = 2000;
-
     /**
      * The camera sensor is landscape while the activity is locked to portrait, so frames reach
      * ML Kit rotated by 90 degrees.
@@ -55,7 +52,6 @@ final class CardIdentifier {
     private final Listener listener;
 
     private volatile boolean recognizing;
-    private volatile long intervalMs = ATTEMPT_INTERVAL_MS;
     private long lastAttemptMs;
 
     /** One recognised card, remembering whether it came from the exact collector line. */
@@ -84,24 +80,10 @@ final class CardIdentifier {
         this.listener = listener;
     }
 
-    /** Slows the scan cadence once a card is active; watching for a switch needs less urgency. */
-    void setRelaxed(boolean relaxed) {
-        intervalMs = relaxed ? RELAXED_INTERVAL_MS : ATTEMPT_INTERVAL_MS;
-    }
-
-    /** Everything recognised so far, for rebuilding the chip row after a card switch. */
-    synchronized List<ScryfallLookup.CardSummary> snapshot() {
-        List<ScryfallLookup.CardSummary> cards = new ArrayList<>();
-        for (Match match : matchedByName.values()) {
-            cards.add(match.card);
-        }
-        return cards;
-    }
-
     /** Called from the GL thread once per rendered frame; does nothing most of the time. */
     void maybeIdentify(Frame frame) {
         long now = SystemClock.elapsedRealtime();
-        if (recognizing || now - lastAttemptMs < intervalMs) {
+        if (recognizing || now - lastAttemptMs < ATTEMPT_INTERVAL_MS) {
             return;
         }
 

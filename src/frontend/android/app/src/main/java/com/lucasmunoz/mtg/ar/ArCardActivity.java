@@ -14,11 +14,11 @@ import android.view.View;
 import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.NumberPicker;
 import android.widget.TextView;
 import android.widget.Toast;
-import android.widget.FrameLayout;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.core.graphics.Insets;
@@ -48,6 +48,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import javax.microedition.khronos.egl.EGLConfig;
@@ -57,14 +58,16 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 /**
- * The AR screen: finds a known physical card through the camera and shows its virtual copy with
- * counters.
+ * The AR screen: every card the camera confirms shows up at once, floating over its physical
+ * copy, each carrying its own counters.
  *
- * Recognition is reference-image tracking only — the card's printings are registered as ARCore
- * augmented images at runtime — never "that object looks like a card". When recognition cannot
- * lock on (sleeves, glare, worn foils), tapping a surface places the card manually instead.
- * Counters are stored per printing and reattach whenever that printing is recognised again, which
- * is what lets you put the phone down mid-game and pick the state back up later.
+ * Cards join automatically — the scanner reads titles and collector lines continuously, and every
+ * Scryfall-confirmed card gets its printings registered as reference images; the moment tracking
+ * locks, the card appears. Recognition is reference-image tracking only, never "that shape looks
+ * like a card". Cards whose scans cannot be found (sleeve glare, OCR misreads) wait as chips at
+ * the bottom: tap the chip, then tap a surface, to place one by hand. Tapping a card focuses it
+ * for the counter panel; tapping the focused card lays it onto the physical card and back.
+ * Counters persist per printing and reattach whenever that printing is recognised again.
  */
 public final class ArCardActivity extends Activity implements CardOverlayView.Listener {
 
@@ -81,16 +84,41 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     private static final float CARD_HEIGHT_M = 0.088f;
 
     private static final int CAMERA_PERMISSION_CODE = 41;
+    private static final int MAX_REFERENCE_IMAGES_PER_CARD = 12;
+
+    /** One card on (or headed for) the table. Tracking fields are guarded by sessionLock. */
+    private static final class ActiveCard {
+        final String key;
+        final String name;
+        volatile String printingId;
+        final Map<String, String> printingUrls = new ConcurrentHashMap<>();
+        volatile boolean located;
+        volatile float halfWidthM = CARD_WIDTH_M / 2f;
+        volatile float halfHeightM = CARD_HEIGHT_M / 2f;
+        AugmentedImage trackedImage;
+        Anchor anchor;
+
+        ActiveCard(String key, String name, String imageUrl) {
+            this.key = key;
+            this.name = name;
+            this.printingId = key;
+            printingUrls.put(key, imageUrl);
+        }
+    }
 
     private GLSurfaceView surfaceView;
     private CardOverlayView overlay;
     private TextView statusText;
     private LinearLayout chipRow;
     private TextView taxLabel;
+    private LinearLayout candidateRow;
+    private View candidatesScroll;
+    private View panel;
 
     private final Object sessionLock = new Object();
     private Session session;
-    private boolean databaseAttached;
+    /** True when reference images changed since the session last configured. Guarded by lock. */
+    private boolean databaseDirty;
     private boolean installRequested;
     private final BackgroundRenderer backgroundRenderer = new BackgroundRenderer();
 
@@ -99,55 +127,27 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     private volatile int viewportHeight;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
-
-    private String cardId;
-    private String cardName;
-    private String cardImageUrl;
-    private final Map<String, String> printingImageUrls = new ConcurrentHashMap<>();
-    private final Map<String, Bitmap> referenceBitmaps = new ConcurrentHashMap<>();
-    private volatile boolean imagesReady;
-
-    /**
-     * Bumped on every card switch; in-flight downloads and database builds for the previous card
-     * check it and abandon their work instead of mixing two cards' images.
-     */
-    private volatile int cardGeneration;
-
+    private CardIdentifier identifier;
     private CounterStore store;
-    private volatile String activePrintingId;
-    private CardCounters counters;
     private boolean saveFailureReported;
 
-    // Written only by the GL thread.
-    private AugmentedImage trackedImage;
-    private Anchor manualAnchor;
+    private final Map<String, ActiveCard> cardsByKey = new ConcurrentHashMap<>();
+    private final List<ActiveCard> cardOrder = new CopyOnWriteArrayList<>();
+    /** Which card each registered reference image belongs to, by augmented-image name. */
+    private final Map<String, ActiveCard> cardByPrinting = new ConcurrentHashMap<>();
+    private final Map<String, Bitmap> referenceBitmaps = new ConcurrentHashMap<>();
+
+    private volatile String focusedKey;
+    /** A chip was tapped: the next surface tap places this card. */
+    private volatile String pendingPlacementKey;
     private volatile float pendingTapX = -1f;
     private volatile float pendingTapY = -1f;
-    private Boolean lastShownTracking;
-
-    /** Launched with no card: OCR titles off the camera until the user picks a candidate. */
-    private boolean identifyMode;
-    private CardIdentifier identifier;
-    private volatile boolean cardSelected;
-    /** Set on a card switch; the GL thread drops the old card's tracking when it sees it. */
-    private volatile boolean trackingResetRequested;
-    private LinearLayout candidateRow;
-    private View candidatesScroll;
-    private View panel;
-
-    private static final int MAX_REFERENCE_IMAGES = 12;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_ar_card);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-
-        if (!readIntentExtras()) {
-            Toast.makeText(this, R.string.ar_bad_launch, Toast.LENGTH_LONG).show();
-            finish();
-            return;
-        }
 
         statusText = findViewById(R.id.ar_status);
         chipRow = findViewById(R.id.ar_chip_row);
@@ -168,29 +168,45 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         applySystemBarInsets();
         store = new CounterStore(getFilesDir());
         wireCounterControls();
+        panel.setVisibility(View.GONE);
+        statusText.setText(R.string.ar_status_scan);
 
-        // The scanner runs in every session — also when opened from search — so pointing the
-        // camera at a different card offers it as a switch chip instead of ignoring it.
-        identifier = new CardIdentifier(executor, this::showCandidates);
+        // The scanner always runs: every confirmed card joins the scene by itself.
+        identifier = new CardIdentifier(executor, this::onCandidatesRecognized);
 
-        if (identifyMode) {
-            panel.setVisibility(View.GONE);
-            statusText.setText(R.string.ar_status_scan);
-        } else {
-            setActivePrinting(cardId);
-            cardSelected = true;
-            identifier.setRelaxed(true);
-            statusText.setText(getString(R.string.ar_status_searching, cardName));
-            final int generation = cardGeneration;
-            executor.execute(() -> downloadImages(generation));
+        addCardFromIntent();
+    }
+
+    /** A card opened from search joins immediately, with its art versions sent by the web side. */
+    private void addCardFromIntent() {
+        String cardId = getIntent().getStringExtra(EXTRA_CARD_ID);
+        String cardName = getIntent().getStringExtra(EXTRA_CARD_NAME);
+        String imageUrl = getIntent().getStringExtra(EXTRA_IMAGE_URL);
+        if (cardId == null || cardName == null || imageUrl == null) {
+            return; // Scan mode: the camera decides which cards exist.
         }
+
+        ActiveCard card = new ActiveCard(cardId, cardName, imageUrl);
+        String printingsJson = getIntent().getStringExtra(EXTRA_PRINTINGS);
+        if (printingsJson != null) {
+            try {
+                JSONArray printings = new JSONArray(printingsJson);
+                for (int i = 0; i < printings.length()
+                        && card.printingUrls.size() < MAX_REFERENCE_IMAGES_PER_CARD; i++) {
+                    JSONObject printing = printings.getJSONObject(i);
+                    card.printingUrls.putIfAbsent(
+                            printing.getString("id"), printing.getString("imageUrl"));
+                }
+            } catch (JSONException e) {
+                Log.w(TAG, "Ignoring malformed printings payload.", e);
+            }
+        }
+        adoptCard(card, false);
     }
 
     /**
      * The activity draws edge-to-edge (Android 15 enforces it), so the camera view stays
-     * full-bleed while the touchable chrome moves inside the system bars: the close button and
-     * status line drop below the status bar and cutout, the counter panel rises above the
-     * gesture-navigation bar.
+     * full-bleed while the touchable chrome moves inside the system bars.
      */
     private void applySystemBarInsets() {
         View close = findViewById(R.id.ar_close);
@@ -216,56 +232,77 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         });
     }
 
-    private boolean readIntentExtras() {
-        cardId = getIntent().getStringExtra(EXTRA_CARD_ID);
-        cardName = getIntent().getStringExtra(EXTRA_CARD_NAME);
-        cardImageUrl = getIntent().getStringExtra(EXTRA_IMAGE_URL);
-        String printingsJson = getIntent().getStringExtra(EXTRA_PRINTINGS);
-        if (cardId == null && cardName == null && cardImageUrl == null) {
-            // No card at all: scan mode, where the camera decides which card this is.
-            identifyMode = true;
-            return true;
-        }
-        if (cardId == null || cardName == null || cardImageUrl == null) {
-            return false;
-        }
+    // ------------------------------------------------------------------------------ card joining
 
-        printingImageUrls.put(cardId, cardImageUrl);
-        if (printingsJson != null) {
-            try {
-                JSONArray printings = new JSONArray(printingsJson);
-                for (int i = 0; i < printings.length(); i++) {
-                    JSONObject printing = printings.getJSONObject(i);
-                    printingImageUrls.putIfAbsent(
-                            printing.getString("id"), printing.getString("imageUrl"));
+    /** Every card the scanner has confirmed so far; new ones join the scene automatically. */
+    private void onCandidatesRecognized(List<ScryfallLookup.CardSummary> candidates) {
+        for (ScryfallLookup.CardSummary candidate : candidates) {
+            ActiveCard existing = findCardByName(candidate.name);
+            if (existing == null) {
+                runOnUiThread(() -> adoptCard(
+                        new ActiveCard(candidate.id, candidate.name, candidate.imageUrl), true));
+            } else if (existing.printingUrls.putIfAbsent(candidate.id, candidate.imageUrl)
+                    == null) {
+                // A more precise reading — usually the collector line — named another printing
+                // of a card already here. That printing is almost certainly the physical copy,
+                // so it joins the reference images, and the counters key onto it until tracking
+                // settles the question.
+                cardByPrinting.put(candidate.id, existing);
+                if (!existing.located) {
+                    existing.printingId = candidate.id;
                 }
-            } catch (JSONException e) {
-                Log.w(TAG, "Ignoring malformed printings payload.", e);
+                executor.execute(() -> downloadImages(existing));
             }
         }
-        return true;
     }
 
-    /** Downloads the display scan plus every reference image, then attaches the image database. */
-    private void downloadImages(int generation) {
-        try {
-            Bitmap display = ImageFetcher.fetch(cardImageUrl);
-            if (generation != cardGeneration) {
-                return; // The user already switched to another card; this art would be wrong.
+    private ActiveCard findCardByName(String name) {
+        for (ActiveCard card : cardOrder) {
+            if (card.name.equalsIgnoreCase(name)) {
+                return card;
             }
-            runOnUiThread(() -> overlay.setCardBitmap(display));
-        } catch (IOException e) {
-            Log.w(TAG, "Could not download the card scan.", e);
-            runOnUiThread(() -> {
-                Toast.makeText(this, R.string.ar_image_download_failed, Toast.LENGTH_LONG).show();
-                finish();
-            });
+        }
+        return null;
+    }
+
+    /** Registers a card and starts fetching its art; it appears once tracking locks on. */
+    private void adoptCard(ActiveCard card, boolean fetchArtVersions) {
+        if (cardsByKey.putIfAbsent(card.key, card) != null) {
             return;
         }
+        cardOrder.add(card);
+        for (String printingId : card.printingUrls.keySet()) {
+            cardByPrinting.put(printingId, card);
+        }
+        overlay.upsertCard(card.key, null);
+        pushCounterChips(card);
+        refreshPendingChips();
 
-        for (Map.Entry<String, String> entry : printingImageUrls.entrySet()) {
-            if (generation != cardGeneration) {
-                return;
+        executor.execute(() -> {
+            if (fetchArtVersions) {
+                try {
+                    for (ScryfallLookup.CardSummary version
+                            : ScryfallLookup.artVersions(card.name)) {
+                        if (card.printingUrls.size() >= MAX_REFERENCE_IMAGES_PER_CARD) {
+                            break;
+                        }
+                        if (card.printingUrls.putIfAbsent(version.id, version.imageUrl) == null) {
+                            cardByPrinting.put(version.id, card);
+                        }
+                    }
+                } catch (IOException e) {
+                    Log.w(TAG, "No art versions; tracking only the identified printing.", e);
+                }
+            }
+            downloadImages(card);
+        });
+    }
+
+    /** Downloads any missing reference scans for a card, then re-registers the database. */
+    private void downloadImages(ActiveCard card) {
+        for (Map.Entry<String, String> entry : card.printingUrls.entrySet()) {
+            if (referenceBitmaps.containsKey(entry.getKey())) {
+                continue;
             }
             try {
                 referenceBitmaps.put(entry.getKey(), ImageFetcher.fetch(entry.getValue()));
@@ -275,24 +312,36 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             }
         }
 
-        if (generation != cardGeneration) {
-            return;
+        // Until tracking picks the real printing, display the best guess: the printing the
+        // counters currently key on.
+        Bitmap display = referenceBitmaps.get(card.printingId);
+        if (display == null) {
+            display = referenceBitmaps.get(card.key);
         }
-        imagesReady = true;
-        executor.execute(this::attachDatabaseIfPossible);
+        if (display != null) {
+            overlay.upsertCard(card.key, display);
+        } else {
+            Log.w(TAG, "No scan could be downloaded for " + card.name);
+        }
+
+        synchronized (sessionLock) {
+            databaseDirty = true;
+        }
+        executor.execute(this::reconfigureDatabaseIfDirty);
     }
 
     /**
-     * Registers the downloaded printings as ARCore reference images. Runs on the executor: image
-     * feature extraction takes tens of milliseconds per printing, too slow for the UI thread.
+     * Rebuilds the reference-image database from every card's downloaded scans. Runs on the
+     * executor: feature extraction takes tens of milliseconds per image. Cards already tracking
+     * keep their place — the pose moves onto a world anchor before the session reconfigures,
+     * because a database swap stops all current image tracking until re-detection.
      */
-    private void attachDatabaseIfPossible() {
-        int generation = cardGeneration;
+    private void reconfigureDatabaseIfDirty() {
         synchronized (sessionLock) {
-            if (session == null || databaseAttached || !imagesReady
-                    || generation != cardGeneration) {
+            if (session == null || !databaseDirty || referenceBitmaps.isEmpty()) {
                 return;
             }
+            databaseDirty = false;
 
             AugmentedImageDatabase database = new AugmentedImageDatabase(session);
             int registered = 0;
@@ -306,11 +355,20 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                     Log.w(TAG, "Not enough features to track printing " + entry.getKey());
                 }
             }
-
-            if (registered > 0) {
-                session.configure(buildConfig(database));
-                databaseAttached = true;
+            if (registered == 0) {
+                return;
             }
+
+            for (ActiveCard card : cardOrder) {
+                if (card.trackedImage != null) {
+                    if (card.anchor != null) {
+                        card.anchor.detach();
+                    }
+                    card.anchor = session.createAnchor(card.trackedImage.getCenterPose());
+                    card.trackedImage = null;
+                }
+            }
+            session.configure(buildConfig(database));
         }
     }
 
@@ -325,6 +383,8 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         }
         return config;
     }
+
+    // -------------------------------------------------------------------------------- lifecycle
 
     @Override
     protected void onResume() {
@@ -368,6 +428,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 }
                 session = new Session(this);
                 session.configure(buildConfig(null));
+                databaseDirty = !referenceBitmaps.isEmpty();
             } catch (UnavailableUserDeclinedInstallationException e) {
                 Toast.makeText(this, R.string.ar_install_declined, Toast.LENGTH_LONG).show();
                 finish();
@@ -380,7 +441,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             }
         }
 
-        executor.execute(this::attachDatabaseIfPossible);
+        executor.execute(this::reconfigureDatabaseIfDirty);
         return true;
     }
 
@@ -424,37 +485,40 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     // ------------------------------------------------------------------ CardOverlayView.Listener
 
     @Override
-    public void onToggleMode() {
-        overlay.setPlaced(!overlay.isPlaced());
+    public void onFocusChanged(String key) {
+        focusedKey = key;
+        runOnUiThread(() -> {
+            panel.setVisibility(View.VISIBLE);
+            refreshCounterUi();
+            updateStatusLine();
+        });
     }
 
     @Override
-    public void onManualPlace(float x, float y) {
-        if (!cardSelected) {
-            return; // Nothing to place until scan mode has identified a card.
-        }
+    public void onTapEmpty(float x, float y) {
+        // Placement needs a hit test against the AR frame, which only the GL thread can run.
         pendingTapX = x;
         pendingTapY = y;
     }
 
-    // -------------------------------------------------------------------------------- scan mode
+    // -------------------------------------------------------------------- pending-placement chips
 
-    /**
-     * Cards the camera has read so far, as tappable chips — minus the one already active, so the
-     * row reads as "other cards you could switch to". Called off the main thread.
-     */
-    private void showCandidates(List<ScryfallLookup.CardSummary> candidates) {
+    /** Cards identified but not yet located; a chip tap arms manual placement for that card. */
+    private void refreshPendingChips() {
         runOnUiThread(() -> {
             candidateRow.removeAllViews();
             int shown = 0;
-            for (ScryfallLookup.CardSummary candidate : candidates) {
-                if (candidate.name.equalsIgnoreCase(cardName)) {
+            for (ActiveCard card : cardOrder) {
+                if (card.located) {
                     continue;
                 }
                 Button chip = new Button(this);
-                chip.setText(candidate.name);
+                chip.setText(card.name);
                 chip.setAllCaps(false);
-                chip.setOnClickListener(v -> switchToCard(candidate));
+                chip.setOnClickListener(v -> {
+                    pendingPlacementKey = card.key;
+                    updateStatusLine();
+                });
                 candidateRow.addView(chip);
                 shown++;
             }
@@ -462,59 +526,29 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         });
     }
 
-    /**
-     * Makes this card the active one — the first pick in scan mode, or a mid-session switch when
-     * the camera spotted a different card. Everything swaps: art, reference images, counters.
-     */
-    private void switchToCard(ScryfallLookup.CardSummary card) {
-        if (card.id.equals(cardId)) {
-            return;
-        }
-        cardSelected = true;
-        identifier.setRelaxed(true);
-        cardId = card.id;
-        cardName = card.name;
-        cardImageUrl = card.imageUrl;
-
-        // Invalidate everything the previous card left in flight before repopulating.
-        cardGeneration++;
-        imagesReady = false;
-        referenceBitmaps.clear();
-        printingImageUrls.clear();
-        printingImageUrls.put(card.id, card.imageUrl);
-        synchronized (sessionLock) {
-            databaseAttached = false;
-        }
-        trackingResetRequested = true;
-
-        panel.setVisibility(View.VISIBLE);
-        // Rebuild the chip row from everything spotted so far: the previous card becomes a chip,
-        // making a switch back one tap.
-        showCandidates(identifier.snapshot());
-        setActivePrinting(card.id);
-        lastShownTracking = null;
-        statusText.setText(getString(R.string.ar_status_searching, cardName));
-
-        // Art versions turn "this card" into "any printing of this card you might own". The
-        // single-threaded executor serialises this before downloadImages touches the same map.
-        final int generation = cardGeneration;
-        executor.execute(() -> {
-            try {
-                for (ScryfallLookup.CardSummary version : ScryfallLookup.artVersions(card.name)) {
-                    if (generation != cardGeneration
-                            || printingImageUrls.size() >= MAX_REFERENCE_IMAGES) {
-                        break;
-                    }
-                    printingImageUrls.putIfAbsent(version.id, version.imageUrl);
-                }
-            } catch (IOException e) {
-                Log.w(TAG, "No art versions; tracking only the identified printing.", e);
+    private void updateStatusLine() {
+        String pendingKey = pendingPlacementKey;
+        if (pendingKey != null) {
+            ActiveCard pending = cardsByKey.get(pendingKey);
+            if (pending != null) {
+                statusText.setText(getString(R.string.ar_status_place, pending.name));
+                return;
             }
-            downloadImages(generation);
-        });
+        }
+        String focused = focusedKey;
+        ActiveCard card = focused == null ? null : cardsByKey.get(focused);
+        statusText.setText(card == null
+                ? getString(R.string.ar_status_scan)
+                : getString(R.string.ar_status_tracking, card.name));
     }
 
     // ----------------------------------------------------------------------------- counter panel
+
+    private CardCounters focusedCounters() {
+        String key = focusedKey;
+        ActiveCard card = key == null ? null : cardsByKey.get(key);
+        return card == null ? null : store.get(card.printingId);
+    }
 
     private void wireCounterControls() {
         findViewById(R.id.ar_close).setOnClickListener(v -> finish());
@@ -526,13 +560,13 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         findViewById(R.id.ar_keyword).setOnClickListener(v -> showKeywordDialog());
         findViewById(R.id.ar_tax_minus).setOnClickListener(v -> adjustCommanderCasts(-1));
         findViewById(R.id.ar_tax_plus).setOnClickListener(v -> adjustCommanderCasts(1));
-        refreshCounterUi();
     }
 
     private void wireStatButton(int viewId, int power, int toughness) {
         findViewById(viewId).setOnClickListener(v -> {
+            CardCounters counters = focusedCounters();
             if (counters == null) {
-                return; // Scan mode before a card is picked; the panel is hidden anyway.
+                return; // No card focused yet; the panel is hidden anyway.
             }
             counters.addStat(power, toughness);
             persistAndRefresh();
@@ -540,6 +574,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     }
 
     private void adjustCommanderCasts(int delta) {
+        CardCounters counters = focusedCounters();
         if (counters == null) {
             return;
         }
@@ -560,6 +595,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 .setTitle(R.string.ar_custom_stat_title)
                 .setView(row)
                 .setPositiveButton(android.R.string.ok, (dialog, which) -> {
+                    CardCounters counters = focusedCounters();
                     if (counters == null) {
                         return;
                     }
@@ -594,6 +630,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         new AlertDialog.Builder(this)
                 .setTitle(R.string.ar_keyword_title)
                 .setItems(options, (dialog, which) -> {
+                    CardCounters counters = focusedCounters();
                     if (counters == null) {
                         return;
                     }
@@ -614,6 +651,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 .setTitle(R.string.ar_keyword_title)
                 .setView(input)
                 .setPositiveButton(android.R.string.ok, (dialog, which) -> {
+                    CardCounters counters = focusedCounters();
                     if (counters == null) {
                         return;
                     }
@@ -637,32 +675,43 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         refreshCounterUi();
     }
 
-    /** Rebuilds the tappable chip row and pushes the same labels onto the AR overlay. */
+    /** Rebuilds the focused card's tappable chip row and re-stamps its overlay chips. */
     private void refreshCounterUi() {
-        if (counters == null) {
-            return; // Scan mode before a card is picked.
-        }
+        CardCounters counters = focusedCounters();
         chipRow.removeAllViews();
-        List<String> overlayChips = new ArrayList<>();
+        if (counters == null) {
+            return;
+        }
 
         for (String keyword : new ArrayList<>(counters.keywords)) {
-            overlayChips.add(keyword);
             addChip(keyword, () -> counters.removeKeyword(keyword));
         }
         for (CardCounters.StatCounter stat : new ArrayList<>(counters.stats)) {
             String label = stat.count == 1 ? stat.label() : stat.label() + " ×" + stat.count;
-            overlayChips.add(label);
             addChip(label, () -> counters.removeStat(stat.power, stat.toughness));
         }
-        if (counters.commanderCasts > 0) {
-            overlayChips.add(getString(R.string.ar_tax_chip, counters.commanderTax()));
-        }
+        taxLabel.setText(getString(R.string.ar_tax_chip, counters.commanderTax()));
 
+        ActiveCard card = focusedKey == null ? null : cardsByKey.get(focusedKey);
+        if (card != null) {
+            pushCounterChips(card);
+        }
+    }
+
+    /** Sends one card's counter chips to the overlay, where they render above the card. */
+    private void pushCounterChips(ActiveCard card) {
+        CardCounters counters = store.get(card.printingId);
+        List<String> labels = new ArrayList<>(counters.keywords);
+        for (CardCounters.StatCounter stat : counters.stats) {
+            labels.add(stat.count == 1 ? stat.label() : stat.label() + " ×" + stat.count);
+        }
+        if (counters.commanderCasts > 0) {
+            labels.add(getString(R.string.ar_tax_chip, counters.commanderTax()));
+        }
         String summary = counters.stats.isEmpty()
                 ? ""
                 : String.format("%+d/%+d", counters.netPower(), counters.netToughness());
-        taxLabel.setText(getString(R.string.ar_tax_chip, counters.commanderTax()));
-        overlay.setChips(overlayChips, summary);
+        overlay.setChips(card.key, labels, summary);
     }
 
     private void addChip(String label, Runnable onRemove) {
@@ -674,29 +723,6 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             persistAndRefresh();
         });
         chipRow.addView(chip);
-    }
-
-    private void setActivePrinting(String printingId) {
-        activePrintingId = printingId;
-        counters = store.get(printingId);
-        runOnUiThread(() -> {
-            if (chipRow != null) {
-                refreshCounterUi();
-            }
-        });
-    }
-
-    private void updateStatus(boolean tracking) {
-        if (cardName == null) {
-            return; // Scan mode owns the status line until a card is picked.
-        }
-        if (lastShownTracking != null && lastShownTracking == tracking) {
-            return;
-        }
-        lastShownTracking = tracking;
-        runOnUiThread(() -> statusText.setText(tracking
-                ? getString(R.string.ar_status_tracking, cardName)
-                : getString(R.string.ar_status_searching, cardName)));
     }
 
     // -------------------------------------------------------------------------------- GL renderer
@@ -748,54 +774,76 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 if (identifier != null) {
                     identifier.maybeIdentify(frame);
                 }
-                if (trackingResetRequested) {
-                    trackingResetRequested = false;
-                    trackedImage = null;
-                    if (manualAnchor != null) {
-                        manualAnchor.detach();
-                        manualAnchor = null;
-                    }
-                }
-                updateTrackedImage(frame);
+                updateTrackedImages(frame);
                 handlePendingTap(frame);
-                CardOverlayView.OverlayState state = computeOverlayState(camera);
-                updateStatus(state.tracking);
-                overlay.postState(state);
+                overlay.postGeometry(computePoses(camera));
             }
         }
 
-        private void updateTrackedImage(Frame frame) {
+        private void updateTrackedImages(Frame frame) {
             for (AugmentedImage image : frame.getUpdatedTrackables(AugmentedImage.class)) {
                 boolean solidLock = image.getTrackingState() == TrackingState.TRACKING
                         && image.getTrackingMethod()
                                 == AugmentedImage.TrackingMethod.FULL_TRACKING;
-                // A stale update from before a card switch must not resurrect the old card.
-                if (!solidLock || !printingImageUrls.containsKey(image.getName())) {
+                ActiveCard card = cardByPrinting.get(image.getName());
+                if (!solidLock || card == null) {
                     continue;
                 }
 
-                boolean newLock = trackedImage == null
-                        || !trackedImage.getName().equals(image.getName());
-                trackedImage = image;
-                if (manualAnchor != null) {
-                    manualAnchor.detach();
-                    manualAnchor = null;
+                boolean newLock = card.trackedImage == null
+                        || !card.trackedImage.getName().equals(image.getName());
+                card.trackedImage = image;
+                card.halfWidthM = image.getExtentX() / 2f;
+                card.halfHeightM = image.getExtentZ() / 2f;
+                if (card.anchor != null) {
+                    card.anchor.detach();
+                    card.anchor = null;
                 }
+
                 if (newLock) {
-                    // Float the printing that is actually on the table, not whichever scan the
-                    // card was opened with — its reference bitmap is already downloaded.
+                    // Show the printing that is actually on the table — its scan is downloaded.
                     Bitmap recognised = referenceBitmaps.get(image.getName());
                     if (recognised != null) {
-                        runOnUiThread(() -> overlay.setCardBitmap(recognised));
+                        overlay.upsertCard(card.key, recognised);
                     }
                 }
-                if (!image.getName().equals(activePrintingId)) {
-                    // A different printing was recognised: its own counters take over.
-                    setActivePrinting(image.getName());
+                if (!image.getName().equals(card.printingId)) {
+                    // A different printing of this card: its own counters take over.
+                    card.printingId = image.getName();
+                    runOnUiThread(() -> {
+                        pushCounterChips(card);
+                        if (card.key.equals(focusedKey)) {
+                            refreshCounterUi();
+                        }
+                    });
                 }
+                markLocated(card);
             }
         }
 
+        private void markLocated(ActiveCard card) {
+            if (card.key.equals(pendingPlacementKey)) {
+                pendingPlacementKey = null; // Tracking found it; no manual placement needed.
+            }
+            if (card.located) {
+                return;
+            }
+            card.located = true;
+            if (focusedKey == null) {
+                focusedKey = card.key;
+                overlay.setFocus(card.key);
+            }
+            runOnUiThread(() -> {
+                if (card.key.equals(focusedKey)) {
+                    panel.setVisibility(View.VISIBLE);
+                    refreshCounterUi();
+                }
+                refreshPendingChips();
+                updateStatusLine();
+            });
+        }
+
+        /** Places the armed pending card — or a lone unlocated one — at the tapped surface. */
         private void handlePendingTap(Frame frame) {
             float x = pendingTapX;
             float y = pendingTapY;
@@ -804,8 +852,23 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             }
             pendingTapX = -1f;
             pendingTapY = -1f;
-            if (trackedImage != null) {
-                return; // Recognition already anchors the card; a manual anchor would fight it.
+
+            ActiveCard target = null;
+            String armed = pendingPlacementKey;
+            if (armed != null) {
+                target = cardsByKey.get(armed);
+            } else {
+                for (ActiveCard card : cardOrder) {
+                    if (!card.located) {
+                        if (target != null) {
+                            return; // Several cards waiting: make the user pick a chip first.
+                        }
+                        target = card;
+                    }
+                }
+            }
+            if (target == null || target.trackedImage != null) {
+                return;
             }
 
             for (HitResult hit : frame.hitTest(x, y)) {
@@ -814,44 +877,52 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                         && ((Plane) trackable).isPoseInPolygon(hit.getHitPose()))
                         || trackable instanceof Point;
                 if (usable) {
-                    if (manualAnchor != null) {
-                        manualAnchor.detach();
+                    if (target.anchor != null) {
+                        target.anchor.detach();
                     }
-                    manualAnchor = hit.createAnchor();
+                    target.anchor = hit.createAnchor();
+                    pendingPlacementKey = null;
+                    markLocated(target);
                     return;
                 }
             }
         }
 
-        private CardOverlayView.OverlayState computeOverlayState(Camera camera) {
-            CardOverlayView.OverlayState notTracking =
-                    new CardOverlayView.OverlayState(false, null, 0, 0, 0);
+        private List<CardOverlayView.CardPose> computePoses(Camera camera) {
+            List<CardOverlayView.CardPose> poses = new ArrayList<>();
             if (camera.getTrackingState() != TrackingState.TRACKING) {
-                return notTracking;
-            }
-
-            Pose pose;
-            float halfWidth;
-            float halfHeight;
-            if (trackedImage != null && trackedImage.getTrackingState() == TrackingState.TRACKING
-                    && trackedImage.getTrackingMethod()
-                            == AugmentedImage.TrackingMethod.FULL_TRACKING) {
-                pose = trackedImage.getCenterPose();
-                halfWidth = trackedImage.getExtentX() / 2f;
-                halfHeight = trackedImage.getExtentZ() / 2f;
-            } else if (manualAnchor != null
-                    && manualAnchor.getTrackingState() == TrackingState.TRACKING) {
-                pose = manualAnchor.getPose();
-                halfWidth = CARD_WIDTH_M / 2f;
-                halfHeight = CARD_HEIGHT_M / 2f;
-            } else {
-                return notTracking;
+                return poses;
             }
 
             camera.getViewMatrix(viewMatrix, 0);
             camera.getProjectionMatrix(projectionMatrix, 0, 0.1f, 100f);
             Matrix.multiplyMM(viewProjection, 0, projectionMatrix, 0, viewMatrix, 0);
 
+            for (ActiveCard card : cardOrder) {
+                CardOverlayView.CardPose pose = computePose(card);
+                if (pose != null) {
+                    poses.add(pose);
+                }
+            }
+            return poses;
+        }
+
+        private CardOverlayView.CardPose computePose(ActiveCard card) {
+            Pose pose;
+            if (card.trackedImage != null
+                    && card.trackedImage.getTrackingState() == TrackingState.TRACKING
+                    && card.trackedImage.getTrackingMethod()
+                            == AugmentedImage.TrackingMethod.FULL_TRACKING) {
+                pose = card.trackedImage.getCenterPose();
+            } else if (card.anchor != null
+                    && card.anchor.getTrackingState() == TrackingState.TRACKING) {
+                pose = card.anchor.getPose();
+            } else {
+                return null;
+            }
+
+            float halfWidth = card.halfWidthM;
+            float halfHeight = card.halfHeightM;
             // The image lies in the pose's X-Z plane; -Z is the top edge of the artwork.
             float[][] localCorners = {
                     {-halfWidth, 0, -halfHeight},
@@ -863,20 +934,19 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             for (int i = 0; i < 4; i++) {
                 float[] screen = projectToScreen(pose.transformPoint(localCorners[i]));
                 if (screen == null) {
-                    return notTracking;
+                    return null;
                 }
                 corners[i * 2] = screen[0];
                 corners[i * 2 + 1] = screen[1];
             }
 
-            float[] center = projectToScreen(
-                    new float[] {pose.tx(), pose.ty(), pose.tz()});
+            float[] center = projectToScreen(new float[] {pose.tx(), pose.ty(), pose.tz()});
             if (center == null) {
-                return notTracking;
+                return null;
             }
 
             float baseWidth = (float) Math.hypot(corners[2] - corners[0], corners[3] - corners[1]);
-            return new CardOverlayView.OverlayState(true, corners, center[0], center[1], baseWidth);
+            return new CardOverlayView.CardPose(card.key, corners, center[0], center[1], baseWidth);
         }
 
         /** World point to screen pixels, or null when it is behind the camera. */

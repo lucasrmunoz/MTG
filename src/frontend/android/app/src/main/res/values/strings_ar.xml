@@ -3,7 +3,8 @@
     <string name="ar_bad_launch">The AR view was opened without a card.</string>
     <string name="ar_close">✕</string>
     <string name="ar_status_searching">Looking for %1$s — point the camera at it, or tap a surface to place it</string>
-    <string name="ar_status_scan">Point the camera at a card — names it reads appear below; tap one</string>
+    <string name="ar_status_scan">Point the camera at your cards — each appears once recognised</string>
+    <string name="ar_status_place">Tap a surface to place %1$s</string>
     <string name="ar_status_tracking">Tracking %1$s</string>
     <string name="ar_camera_unavailable">The camera is not available right now.</string>
     <string name="ar_camera_denied">AR needs the camera; permission was denied.</string>

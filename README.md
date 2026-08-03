@@ -163,19 +163,21 @@ virtual copy carrying its counters. Native side in `android/…/mtg/ar/`, bridge
   rectangle looks like a card". Every art version rides along, so whichever copy you own is
   found; tapping a surface places the card manually when tracking can't lock (sleeve glare,
   low-detail full-art printings).
-- **Scan-first mode.** "Scan a card in AR" opens the camera with no card chosen: on-device OCR
+- **Cards join by themselves, several at once.** The scanner runs continuously: on-device OCR
   (ML Kit, bundled — hence most of the APK's size) reads title lines off the frames, each is
   confirmed through Scryfall's fuzzy lookup — which forgives OCR misreads like it forgives
-  typos — and every confirmed card becomes a tappable chip; several cards in view give several
-  chips. The collector line ("L 0195" / "SPM • EN") is read too and resolved to the *exact*
-  printing, which is what gets basic lands right — "Island" matches hundreds of artworks, "SPM
-  195" is one card. Picking a chip loads its printings and continues exactly like opening from
-  search. Still known-cards-only: OCR merely decides which known card to register, nothing is
-  guessed from shape.
-- **Floating or placed.** The copy floats upright above the physical card — pinch to zoom — and a
-  tap lays it perspective-correct on top of the card; tap again to lift it. Rendering is
-  screen-space from the projected pose (no 3D engine); the camera feed is the standard ARCore GL
-  background quad.
+  typos — and every confirmed card is registered and appears floating over its physical copy the
+  moment tracking locks, no tap required. The collector line ("L 0195" / "SPM • EN") is read too
+  and resolved to the *exact* printing, which is what gets basic lands right — "Island" matches
+  hundreds of artworks, "SPM 195" is one card. Cards identified but not yet found by tracking
+  wait as chips at the bottom: tap the chip, then tap a surface, to place one by hand. Physical
+  token cards resolve like any card. Still known-cards-only: OCR merely decides which known card
+  to register, nothing is guessed from shape.
+- **Focus, floating, placed.** Every card floats upright above its physical copy by default.
+  Tapping a card focuses it — the counter panel and pinch-zoom follow the focused card — and
+  tapping the focused card lays it perspective-correct onto the physical card; tap again to lift
+  it. Rendering is screen-space from the projected poses (no 3D engine); the camera feed is the
+  standard ARCore GL background quad.
 - **Counters.** Keyword counters (preset list + free text), stat counters in every sign
   combination (`+X/+X`, `-X/-X`, `+X/-X`, `-X/+X`, merged by kind with counts), and commander
   tax tracked as casts-from-command-zone (+2 each). Chips show on the virtual card; the panel
