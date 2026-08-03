@@ -45,7 +45,6 @@ import com.google.ar.core.exceptions.UnavailableUserDeclinedInstallationExceptio
 import com.lucasmunoz.mtg.R;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -104,9 +103,15 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     private String cardId;
     private String cardName;
     private String cardImageUrl;
-    private final Map<String, String> printingImageUrls = new LinkedHashMap<>();
+    private final Map<String, String> printingImageUrls = new ConcurrentHashMap<>();
     private final Map<String, Bitmap> referenceBitmaps = new ConcurrentHashMap<>();
     private volatile boolean imagesReady;
+
+    /**
+     * Bumped on every card switch; in-flight downloads and database builds for the previous card
+     * check it and abandon their work instead of mixing two cards' images.
+     */
+    private volatile int cardGeneration;
 
     private CounterStore store;
     private volatile String activePrintingId;
@@ -124,6 +129,8 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     private boolean identifyMode;
     private CardIdentifier identifier;
     private volatile boolean cardSelected;
+    /** Set on a card switch; the GL thread drops the old card's tracking when it sees it. */
+    private volatile boolean trackingResetRequested;
     private LinearLayout candidateRow;
     private View candidatesScroll;
     private View panel;
@@ -162,15 +169,20 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         store = new CounterStore(getFilesDir());
         wireCounterControls();
 
+        // The scanner runs in every session — also when opened from search — so pointing the
+        // camera at a different card offers it as a switch chip instead of ignoring it.
+        identifier = new CardIdentifier(executor, this::showCandidates);
+
         if (identifyMode) {
             panel.setVisibility(View.GONE);
-            identifier = new CardIdentifier(executor, this::showCandidates);
             statusText.setText(R.string.ar_status_scan);
         } else {
             setActivePrinting(cardId);
             cardSelected = true;
+            identifier.setRelaxed(true);
             statusText.setText(getString(R.string.ar_status_searching, cardName));
-            executor.execute(this::downloadImages);
+            final int generation = cardGeneration;
+            executor.execute(() -> downloadImages(generation));
         }
     }
 
@@ -235,9 +247,12 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     }
 
     /** Downloads the display scan plus every reference image, then attaches the image database. */
-    private void downloadImages() {
+    private void downloadImages(int generation) {
         try {
             Bitmap display = ImageFetcher.fetch(cardImageUrl);
+            if (generation != cardGeneration) {
+                return; // The user already switched to another card; this art would be wrong.
+            }
             runOnUiThread(() -> overlay.setCardBitmap(display));
         } catch (IOException e) {
             Log.w(TAG, "Could not download the card scan.", e);
@@ -249,6 +264,9 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         }
 
         for (Map.Entry<String, String> entry : printingImageUrls.entrySet()) {
+            if (generation != cardGeneration) {
+                return;
+            }
             try {
                 referenceBitmaps.put(entry.getKey(), ImageFetcher.fetch(entry.getValue()));
             } catch (IOException e) {
@@ -257,6 +275,9 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             }
         }
 
+        if (generation != cardGeneration) {
+            return;
+        }
         imagesReady = true;
         executor.execute(this::attachDatabaseIfPossible);
     }
@@ -266,8 +287,10 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
      * feature extraction takes tens of milliseconds per printing, too slow for the UI thread.
      */
     private void attachDatabaseIfPossible() {
+        int generation = cardGeneration;
         synchronized (sessionLock) {
-            if (session == null || databaseAttached || !imagesReady) {
+            if (session == null || databaseAttached || !imagesReady
+                    || generation != cardGeneration) {
                 return;
             }
 
@@ -416,48 +439,70 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
 
     // -------------------------------------------------------------------------------- scan mode
 
-    /** Candidate cards the camera has read so far, as tappable chips. Off the main thread. */
+    /**
+     * Cards the camera has read so far, as tappable chips — minus the one already active, so the
+     * row reads as "other cards you could switch to". Called off the main thread.
+     */
     private void showCandidates(List<ScryfallLookup.CardSummary> candidates) {
         runOnUiThread(() -> {
-            if (cardSelected) {
-                return;
-            }
             candidateRow.removeAllViews();
+            int shown = 0;
             for (ScryfallLookup.CardSummary candidate : candidates) {
+                if (candidate.name.equalsIgnoreCase(cardName)) {
+                    continue;
+                }
                 Button chip = new Button(this);
                 chip.setText(candidate.name);
                 chip.setAllCaps(false);
-                chip.setOnClickListener(v -> selectCandidate(candidate));
+                chip.setOnClickListener(v -> switchToCard(candidate));
                 candidateRow.addView(chip);
+                shown++;
             }
-            candidatesScroll.setVisibility(View.VISIBLE);
+            candidatesScroll.setVisibility(shown > 0 ? View.VISIBLE : View.GONE);
         });
     }
 
-    /** Locks scan mode onto one card; from here the flow is identical to opening from search. */
-    private void selectCandidate(ScryfallLookup.CardSummary card) {
-        if (cardSelected) {
+    /**
+     * Makes this card the active one — the first pick in scan mode, or a mid-session switch when
+     * the camera spotted a different card. Everything swaps: art, reference images, counters.
+     */
+    private void switchToCard(ScryfallLookup.CardSummary card) {
+        if (card.id.equals(cardId)) {
             return;
         }
         cardSelected = true;
+        identifier.setRelaxed(true);
         cardId = card.id;
         cardName = card.name;
         cardImageUrl = card.imageUrl;
+
+        // Invalidate everything the previous card left in flight before repopulating.
+        cardGeneration++;
+        imagesReady = false;
+        referenceBitmaps.clear();
         printingImageUrls.clear();
         printingImageUrls.put(card.id, card.imageUrl);
+        synchronized (sessionLock) {
+            databaseAttached = false;
+        }
+        trackingResetRequested = true;
 
-        candidatesScroll.setVisibility(View.GONE);
         panel.setVisibility(View.VISIBLE);
+        // Rebuild the chip row from everything spotted so far: the previous card becomes a chip,
+        // making a switch back one tap.
+        showCandidates(identifier.snapshot());
         setActivePrinting(card.id);
         lastShownTracking = null;
         statusText.setText(getString(R.string.ar_status_searching, cardName));
 
         // Art versions turn "this card" into "any printing of this card you might own". The
         // single-threaded executor serialises this before downloadImages touches the same map.
+        final int generation = cardGeneration;
         executor.execute(() -> {
             try {
                 for (ScryfallLookup.CardSummary version : ScryfallLookup.artVersions(card.name)) {
-                    if (printingImageUrls.size() >= MAX_REFERENCE_IMAGES) {
+                    if (generation != cardGeneration
+                            || printingImageUrls.size() >= MAX_REFERENCE_IMAGES) {
                         break;
                     }
                     printingImageUrls.putIfAbsent(version.id, version.imageUrl);
@@ -465,7 +510,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             } catch (IOException e) {
                 Log.w(TAG, "No art versions; tracking only the identified printing.", e);
             }
-            downloadImages();
+            downloadImages(generation);
         });
     }
 
@@ -700,8 +745,16 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
 
                 backgroundRenderer.draw(frame);
                 Camera camera = frame.getCamera();
-                if (identifier != null && !cardSelected) {
+                if (identifier != null) {
                     identifier.maybeIdentify(frame);
+                }
+                if (trackingResetRequested) {
+                    trackingResetRequested = false;
+                    trackedImage = null;
+                    if (manualAnchor != null) {
+                        manualAnchor.detach();
+                        manualAnchor = null;
+                    }
                 }
                 updateTrackedImage(frame);
                 handlePendingTap(frame);
@@ -716,7 +769,8 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 boolean solidLock = image.getTrackingState() == TrackingState.TRACKING
                         && image.getTrackingMethod()
                                 == AugmentedImage.TrackingMethod.FULL_TRACKING;
-                if (!solidLock) {
+                // A stale update from before a card switch must not resurrect the old card.
+                if (!solidLock || !printingImageUrls.containsKey(image.getName())) {
                     continue;
                 }
 
