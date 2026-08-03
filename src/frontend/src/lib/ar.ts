@@ -34,6 +34,8 @@ export interface ArGameCard {
   id: string;
   name: string;
   imageUrl: string;
+  /** Art-only crop for the AR life token; null when Scryfall publishes none. */
+  artCropUrl: string | null;
 }
 
 /**

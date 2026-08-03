@@ -20,9 +20,11 @@ public final class GamePlayer {
     public final String cardId;
     public final String cardName;
     public final String cardImageUrl;
+    /** Art-only crop for the life token; null when Scryfall has none (the scan stands in). */
+    public final String cardArtCropUrl;
 
     GamePlayer(int id, String name, int life, int commanderCasts,
-            String cardId, String cardName, String cardImageUrl) {
+            String cardId, String cardName, String cardImageUrl, String cardArtCropUrl) {
         this.id = id;
         this.name = name;
         this.life = life;
@@ -30,6 +32,7 @@ public final class GamePlayer {
         this.cardId = cardId;
         this.cardName = cardName;
         this.cardImageUrl = cardImageUrl;
+        this.cardArtCropUrl = cardArtCropUrl;
     }
 
     /** True when there is a commander scan the camera can look for. */
@@ -63,10 +66,13 @@ public final class GamePlayer {
 
         JSONObject card = json.isNull("card") ? null : json.optJSONObject("card");
         if (card == null) {
-            return new GamePlayer(id, name, life, casts, null, null, null);
+            return new GamePlayer(id, name, life, casts, null, null, null, null);
         }
+        // artCropUrl is optional and nullable — older payloads simply have no token art.
+        String artCropUrl = card.isNull("artCropUrl") ? null : card.getString("artCropUrl");
         return new GamePlayer(id, name, life, casts,
-                card.getString("id"), card.getString("name"), card.getString("imageUrl"));
+                card.getString("id"), card.getString("name"), card.getString("imageUrl"),
+                artCropUrl);
     }
 
     public JSONObject toJson() throws JSONException {
@@ -82,6 +88,7 @@ public final class GamePlayer {
             card.put("id", cardId);
             card.put("name", cardName);
             card.put("imageUrl", cardImageUrl);
+            card.put("artCropUrl", cardArtCropUrl == null ? JSONObject.NULL : cardArtCropUrl);
             json.put("card", card);
         }
         return json;

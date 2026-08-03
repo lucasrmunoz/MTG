@@ -29,7 +29,11 @@
     <string name="ar_bad_game_launch">The AR game was opened with a broken player list.</string>
     <string name="ar_status_game">Point the camera at each commander — its owner\'s badge appears</string>
     <string name="ar_status_game_tracking">%1$s — %2$s</string>
-    <string name="ar_game_hint">Tap a commander to select its player · − / + adjust life and tax</string>
+    <string name="ar_game_hint">Tap a commander or life token to select its player · − / + adjust life and tax · drag tokens onto the table</string>
+    <string name="ar_cards_toggle">Cards (%1$d)</string>
+    <string name="ar_card_tracking">Tracking</string>
+    <string name="ar_card_tap_to_place">Tap to place</string>
+    <string name="ar_token_place_failed">No surface found there — the token went back to its tray.</string>
     <string name="ar_no_definition">This mechanic isn\'t in the glossary yet.</string>
     <string name="ar_remove_one">Remove one</string>
     <string name="ar_hint">Tap a keyword for its meaning · ✕ chips remove on tap · tap the card to place/float · pinch to zoom</string>

@@ -112,6 +112,24 @@ public class GameSessionTest {
     }
 
     @Test
+    public void artCropUrlIsOptionalAndRoundTrips() throws JSONException {
+        // Absent artCropUrl (older payload shape) parses as null rather than throwing.
+        GamePlayer bare = GameSession.fromJson(
+                "[" + player(1, "Lucas", 40, 0, card("c1", "Atraxa", "https://img/1")) + "]")
+                .players().get(0);
+        assertNull(bare.cardArtCropUrl);
+
+        String withCrop = "{\"id\":\"c1\",\"name\":\"Atraxa\",\"imageUrl\":\"https://img/1\","
+                + "\"artCropUrl\":\"https://img/crop1\"}";
+        GameSession session = GameSession.fromJson(
+                "[" + player(1, "Lucas", 40, 0, withCrop) + "]");
+        assertEquals("https://img/crop1", session.players().get(0).cardArtCropUrl);
+
+        GamePlayer reparsed = GameSession.fromJson(session.toJsonString()).players().get(0);
+        assertEquals("https://img/crop1", reparsed.cardArtCropUrl);
+    }
+
+    @Test
     public void playerByIdFindsAndMisses() throws JSONException {
         GameSession session = GameSession.fromJson(
                 "[" + player(1, "A", 40, 0, "null") + "," + player(2, "B", 40, 0, "null") + "]");

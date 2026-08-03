@@ -53,6 +53,9 @@ export function CommanderPicker({ player, onPick, onClose }: CommanderPickerProp
     const isCurrent = () => requestId === requestIdRef.current;
 
     setLoading(true);
+    // A new search supersedes any in-flight pick, whose stale response will be discarded by the
+    // id check without ever clearing this flag itself — left true it disables the form for good.
+    setPicking(false);
     setError(null);
     setResults(null);
     setSearchedTerm(null);

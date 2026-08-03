@@ -43,22 +43,28 @@
         android:background="#E6151528"
         android:orientation="vertical">
 
-        <!-- Scan mode: card names read off the camera, tap one to lock on. -->
-        <HorizontalScrollView
-            android:id="@+id/ar_candidates"
-            android:layout_width="match_parent"
+        <!-- Every known card, openable as a detail list: tap a row to place or focus it. -->
+        <Button
+            android:id="@+id/ar_cards_toggle"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:textAllCaps="false"
+            android:visibility="gone" />
+
+        <ScrollView
+            android:id="@+id/ar_card_list_scroll"
+            android:layout_width="match_parent"
+            android:layout_height="280dp"
             android:background="#E6151528"
-            android:padding="8dp"
-            android:scrollbars="none"
             android:visibility="gone">
 
             <LinearLayout
-                android:id="@+id/ar_candidate_row"
-                android:layout_width="wrap_content"
+                android:id="@+id/ar_card_list"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal" />
-        </HorizontalScrollView>
+                android:orientation="vertical" />
+        </ScrollView>
 
         <LinearLayout
             android:id="@+id/ar_panel"

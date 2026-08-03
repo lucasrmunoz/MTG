@@ -6,17 +6,21 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Matrix;
 import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.Rect;
 import android.graphics.RectF;
 import android.util.AttributeSet;
 import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
 import android.view.View;
+import android.view.ViewConfiguration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Draws every active card over the camera view at once: each floats upright above its physical
@@ -49,12 +53,56 @@ public final class CardOverlayView extends View {
         }
     }
 
+    /** Where one placed life token sits on screen this frame, projected from its anchor. */
+    static final class TokenPose {
+        final int playerId;
+        final float centerX;
+        final float centerY;
+        final float widthPx;
+
+        TokenPose(int playerId, float centerX, float centerY, float widthPx) {
+            this.playerId = playerId;
+            this.centerX = centerX;
+            this.centerY = centerY;
+            this.widthPx = widthPx;
+        }
+    }
+
     interface Listener {
         /** A tap focused a different card; the counter panel should follow. */
         void onFocusChanged(String key);
 
         /** A tap hit no card: a chance to place a pending card at this screen point. */
         void onTapEmpty(float x, float y);
+
+        /** Game mode: a life token was tapped — its player should become the focused one. */
+        default void onTokenTapped(int playerId) {}
+
+        /** Game mode: a dragged life token was released here — try to anchor it to the table. */
+        default void onTokenDropped(int playerId, float x, float y) {}
+    }
+
+    /**
+     * One player's life token: their commander's art with the life total, living in the tray
+     * until a drag anchors it to the table. Values are owned by the UI thread; `placed` is
+     * confirmed by the activity once a world anchor exists.
+     */
+    private static final class TokenState {
+        final int playerId;
+        String name = "";
+        Bitmap art;
+        int life;
+        int tax;
+        boolean placed;
+        boolean dragging;
+        float dragX;
+        float dragY;
+        /** Where the token was last drawn, for hit-testing taps and drag starts. */
+        final RectF lastRect = new RectF();
+
+        TokenState(int playerId) {
+            this.playerId = playerId;
+        }
     }
 
     /** Per-card visual state, owned by this view and mutated from the UI thread. */
@@ -70,8 +118,19 @@ public final class CardOverlayView extends View {
 
     private final Map<String, RenderState> renders = new ConcurrentHashMap<>();
     private volatile List<CardPose> poses = Collections.emptyList();
+    private volatile List<TokenPose> tokenPoses = Collections.emptyList();
     private volatile String focusedKey;
     private Listener listener;
+
+    private final Map<Integer, TokenState> tokens = new ConcurrentHashMap<>();
+    /** Draw/tray order for tokens, by player id, so the tray is stable. */
+    private final List<TokenState> tokenOrder = new CopyOnWriteArrayList<>();
+    private volatile int focusedTokenId = -1;
+    private TokenState draggingToken;
+    private float dragDownX;
+    private float dragDownY;
+    private boolean dragMoved;
+    private final int touchSlop;
 
     private final Paint bitmapPaint = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
     private final Paint chipBackground = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -79,7 +138,14 @@ public final class CardOverlayView extends View {
     private final Paint chipText = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint focusedBorder = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint idleBorder = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint tokenScrim = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint tokenSurface = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint tokenLifeText = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint tokenSmallText = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Matrix placeMatrix = new Matrix();
+    private final RectF tokenRect = new RectF();
+    private final Rect tokenSrcRect = new Rect();
+    private final Path tokenClip = new Path();
 
     private final ScaleGestureDetector scaleDetector;
     private final GestureDetector tapDetector;
@@ -102,6 +168,15 @@ public final class CardOverlayView extends View {
         idleBorder.setStyle(Paint.Style.STROKE);
         idleBorder.setStrokeWidth(dp(1.5f));
         idleBorder.setColor(Color.argb(160, 155, 89, 182));
+        tokenScrim.setColor(Color.argb(110, 0, 0, 0));
+        tokenSurface.setColor(Color.argb(235, 45, 45, 68));
+        tokenLifeText.setColor(Color.WHITE);
+        tokenLifeText.setTextAlign(Paint.Align.CENTER);
+        tokenLifeText.setFakeBoldText(true);
+        tokenLifeText.setShadowLayer(dp(2), 0, dp(1), Color.argb(200, 0, 0, 0));
+        tokenSmallText.setColor(Color.WHITE);
+        tokenSmallText.setTextAlign(Paint.Align.CENTER);
+        touchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
 
         scaleDetector = new ScaleGestureDetector(context,
                 new ScaleGestureDetector.SimpleOnScaleGestureListener() {
@@ -153,9 +228,44 @@ public final class CardOverlayView extends View {
         postInvalidate();
     }
 
+    /**
+     * Creates or updates a player's life token. A null art bitmap keeps whatever art the token
+     * already has, mirroring {@link #upsertCard}; life, tax and name always update.
+     */
+    void upsertToken(int playerId, String name, Bitmap art, int life, int tax) {
+        TokenState token = tokens.get(playerId);
+        if (token == null) {
+            token = new TokenState(playerId);
+            tokens.put(playerId, token);
+            tokenOrder.add(token);
+        }
+        token.name = name;
+        if (art != null) {
+            token.art = art;
+        }
+        token.life = life;
+        token.tax = tax;
+        postInvalidate();
+    }
+
+    /** The activity confirms whether a dropped token got a world anchor or returns to the tray. */
+    void setTokenPlaced(int playerId, boolean placed) {
+        TokenState token = tokens.get(playerId);
+        if (token != null) {
+            token.placed = placed;
+            postInvalidate();
+        }
+    }
+
+    void setFocusedToken(int playerId) {
+        focusedTokenId = playerId;
+        postInvalidate();
+    }
+
     /** Called from the GL thread once per rendered frame. */
-    void postGeometry(List<CardPose> newPoses) {
+    void postGeometry(List<CardPose> newPoses, List<TokenPose> newTokenPoses) {
         poses = newPoses;
+        tokenPoses = newTokenPoses;
         postInvalidate();
     }
 
@@ -170,9 +280,84 @@ public final class CardOverlayView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        // Tokens take priority over card gestures: a touch starting on one becomes a drag (or a
+        // tap when the finger never really moves), and the pinch/tap detectors sit that one out.
+        switch (event.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN: {
+                TokenState token = tokenAt(event.getX(), event.getY());
+                if (token != null) {
+                    draggingToken = token;
+                    token.dragging = true;
+                    token.dragX = event.getX();
+                    token.dragY = event.getY();
+                    dragDownX = event.getX();
+                    dragDownY = event.getY();
+                    dragMoved = false;
+                    invalidate();
+                    return true;
+                }
+                break;
+            }
+            case MotionEvent.ACTION_MOVE: {
+                if (draggingToken != null) {
+                    draggingToken.dragX = event.getX();
+                    draggingToken.dragY = event.getY();
+                    if (Math.hypot(event.getX() - dragDownX, event.getY() - dragDownY)
+                            > touchSlop) {
+                        dragMoved = true;
+                    }
+                    invalidate();
+                    return true;
+                }
+                break;
+            }
+            case MotionEvent.ACTION_UP: {
+                if (draggingToken != null) {
+                    TokenState token = draggingToken;
+                    draggingToken = null;
+                    token.dragging = false;
+                    if (dragMoved) {
+                        if (listener != null) {
+                            listener.onTokenDropped(token.playerId, event.getX(), event.getY());
+                        }
+                    } else if (listener != null) {
+                        listener.onTokenTapped(token.playerId);
+                    }
+                    invalidate();
+                    return true;
+                }
+                break;
+            }
+            case MotionEvent.ACTION_CANCEL: {
+                if (draggingToken != null) {
+                    draggingToken.dragging = false;
+                    draggingToken = null;
+                    invalidate();
+                    return true;
+                }
+                break;
+            }
+            default:
+                break;
+        }
+        if (draggingToken != null) {
+            return true;
+        }
+
         scaleDetector.onTouchEvent(event);
         tapDetector.onTouchEvent(event);
         return true;
+    }
+
+    /** The topmost token under a point; tray and placed tokens alike. */
+    private TokenState tokenAt(float x, float y) {
+        for (int i = tokenOrder.size() - 1; i >= 0; i--) {
+            TokenState token = tokenOrder.get(i);
+            if (token.lastRect.contains(x, y)) {
+                return token;
+            }
+        }
+        return null;
     }
 
     /** Focus the tapped card, toggle it when already focused, or offer the point for placement. */
@@ -199,6 +384,11 @@ public final class CardOverlayView extends View {
         }
     }
 
+    /** Fixed on-screen size for tray and dragging tokens; placed ones size by projection. */
+    private static final float TOKEN_TRAY_DP = 68f;
+    private static final float TOKEN_MIN_DP = 44f;
+    private static final float TOKEN_MAX_DP = 160f;
+
     @Override
     protected void onDraw(Canvas canvas) {
         for (CardPose pose : poses) {
@@ -212,6 +402,102 @@ public final class CardOverlayView extends View {
                 drawFloating(canvas, pose, state);
             }
         }
+        drawTokens(canvas);
+    }
+
+    /**
+     * Life tokens draw above everything: placed ones at their anchor's projected position, the
+     * rest in a tray row near the top, and the dragged one under the finger. A placed token
+     * whose anchor is off-screen this frame is not drawn and loses its touch rect — invisible
+     * things must not catch taps.
+     */
+    private void drawTokens(Canvas canvas) {
+        List<TokenPose> projected = tokenPoses;
+        float trayX = dp(8);
+        float trayY = dp(96);
+
+        for (TokenState token : tokenOrder) {
+            if (token.dragging) {
+                drawToken(canvas, token, token.dragX, token.dragY, dp(TOKEN_TRAY_DP));
+                continue;
+            }
+            if (token.placed) {
+                TokenPose pose = null;
+                for (TokenPose candidate : projected) {
+                    if (candidate.playerId == token.playerId) {
+                        pose = candidate;
+                        break;
+                    }
+                }
+                if (pose != null) {
+                    float width = clamp(pose.widthPx, dp(TOKEN_MIN_DP), dp(TOKEN_MAX_DP));
+                    drawToken(canvas, token, pose.centerX, pose.centerY, width);
+                } else {
+                    token.lastRect.setEmpty();
+                }
+                continue;
+            }
+            float half = dp(TOKEN_TRAY_DP) / 2f;
+            drawToken(canvas, token, trayX + half, trayY + half, dp(TOKEN_TRAY_DP));
+            trayX += dp(TOKEN_TRAY_DP) + dp(8);
+        }
+    }
+
+    /** One rounded-square token: commander art (or surface colour), life, name, tax. */
+    private void drawToken(Canvas canvas, TokenState token, float cx, float cy, float width) {
+        float half = width / 2f;
+        tokenRect.set(cx - half, cy - half, cx + half, cy + half);
+        token.lastRect.set(tokenRect);
+        float corner = dp(10);
+
+        canvas.save();
+        tokenClip.rewind();
+        tokenClip.addRoundRect(tokenRect, corner, corner, Path.Direction.CW);
+        canvas.clipPath(tokenClip);
+        if (token.art != null) {
+            centerCropSquare(token.art, tokenSrcRect);
+            canvas.drawBitmap(token.art, tokenSrcRect, tokenRect, bitmapPaint);
+            canvas.drawRect(tokenRect, tokenScrim);
+        } else {
+            canvas.drawRect(tokenRect, tokenSurface);
+        }
+
+        tokenLifeText.setTextSize(width * 0.4f);
+        canvas.drawText(String.valueOf(token.life), cx,
+                cy + tokenLifeText.getTextSize() * 0.35f, tokenLifeText);
+
+        tokenSmallText.setTextSize(Math.max(dp(9), width * 0.13f));
+        canvas.drawText(ellipsize(token.name, tokenSmallText, width - dp(8)), cx,
+                tokenRect.bottom - dp(4), tokenSmallText);
+        if (token.tax > 0) {
+            canvas.drawText("Tax +" + token.tax, cx,
+                    tokenRect.top + tokenSmallText.getTextSize() + dp(3), tokenSmallText);
+        }
+        canvas.restore();
+
+        canvas.drawRoundRect(tokenRect, corner, corner,
+                token.playerId == focusedTokenId ? focusedBorder : idleBorder);
+    }
+
+    /** The largest centered square of a bitmap, for art of any aspect ratio. */
+    private static void centerCropSquare(Bitmap bitmap, Rect out) {
+        int size = Math.min(bitmap.getWidth(), bitmap.getHeight());
+        int left = (bitmap.getWidth() - size) / 2;
+        int top = (bitmap.getHeight() - size) / 2;
+        out.set(left, top, left + size, top + size);
+    }
+
+    private static String ellipsize(String text, Paint paint, float maxWidth) {
+        if (paint.measureText(text) <= maxWidth) {
+            return text;
+        }
+        String ellipsis = "…";
+        int length = text.length();
+        while (length > 1 && paint.measureText(text, 0, length) + paint.measureText(ellipsis)
+                > maxWidth) {
+            length--;
+        }
+        return text.substring(0, length) + ellipsis;
     }
 
     private void drawFloating(Canvas canvas, CardPose pose, RenderState state) {

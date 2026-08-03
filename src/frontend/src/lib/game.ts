@@ -304,6 +304,7 @@ export function toArPlayers(game: GameState): ArGamePlayer[] {
             id: player.commander.id,
             name: player.commander.name,
             imageUrl: player.commander.imageUrl,
+            artCropUrl: player.commander.artCropUrl,
           }
         : null,
   }));

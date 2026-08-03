@@ -16,6 +16,7 @@ import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.NumberPicker;
 import android.widget.TextView;
@@ -106,6 +107,9 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         /** The card's own keyword abilities, offered with glossary definitions in the panel. */
         final List<String> keywords = new CopyOnWriteArrayList<>();
         final Map<String, String> printingUrls = new ConcurrentHashMap<>();
+        /** Type line and set name for the card list; empty until a Scryfall response says. */
+        volatile String typeLine = "";
+        volatile String setName = "";
         volatile boolean located;
         volatile float halfWidthM = CARD_WIDTH_M / 2f;
         volatile float halfHeightM = CARD_HEIGHT_M / 2f;
@@ -130,14 +134,26 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     private View statRow;
     private View keywordButton;
     private TextView hintText;
-    private LinearLayout candidateRow;
-    private View candidatesScroll;
+    private Button cardsToggle;
+    private View cardListScroll;
+    private LinearLayout cardList;
+    private boolean cardListOpen;
     private View panel;
 
     /** Non-null only in Commander game mode; the web layer owns it, this screen edits a copy. */
     private GameSession game;
     /** Which player each game-mode card belongs to, by the card's composite key. */
     private final Map<String, GamePlayer> playersByCardKey = new ConcurrentHashMap<>();
+    /** The focused player in game mode, settable by card focus or a life-token tap. */
+    private volatile int focusedPlayerId = -1;
+
+    /** A life token next to 63mm cards; its world anchors live and die with the session. */
+    private static final float TOKEN_WIDTH_M = 0.06f;
+    private final Map<Integer, Anchor> tokenAnchors = new ConcurrentHashMap<>();
+    /** A dropped token waiting for its GL-thread hit test; -1 when none. */
+    private volatile int pendingTokenPlayerId = -1;
+    private volatile float pendingTokenX;
+    private volatile float pendingTokenY;
 
     private final Object sessionLock = new Object();
     private Session session;
@@ -182,8 +198,13 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         statRow = findViewById(R.id.ar_stat_row);
         keywordButton = findViewById(R.id.ar_keyword);
         hintText = findViewById(R.id.ar_hint_text);
-        candidateRow = findViewById(R.id.ar_candidate_row);
-        candidatesScroll = findViewById(R.id.ar_candidates);
+        cardsToggle = findViewById(R.id.ar_cards_toggle);
+        cardListScroll = findViewById(R.id.ar_card_list_scroll);
+        cardList = findViewById(R.id.ar_card_list);
+        cardsToggle.setOnClickListener(v -> {
+            cardListOpen = !cardListOpen;
+            refreshCardList();
+        });
         panel = findViewById(R.id.ar_panel);
         overlay = findViewById(R.id.ar_overlay);
         overlay.setListener(this);
@@ -241,6 +262,9 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         statusText.setText(R.string.ar_status_game);
         publishGameResult();
         for (GamePlayer player : game.players()) {
+            // Every player gets a life token in the tray, commander or not — life stays
+            // visible and adjustable even when nothing is tracking.
+            overlay.upsertToken(player.id, player.name, null, player.life, player.commanderTax());
             if (player.hasCard()) {
                 adoptGameCard(player);
             }
@@ -324,6 +348,8 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 ActiveCard added =
                         new ActiveCard(candidate.id, candidate.name, candidate.imageUrl);
                 added.keywords.addAll(candidate.keywords);
+                added.typeLine = candidate.typeLine;
+                added.setName = candidate.setName;
                 runOnUiThread(() -> adoptCard(added, true));
             } else if (existing.printingUrls.putIfAbsent(candidate.id, candidate.imageUrl)
                     == null) {
@@ -360,13 +386,16 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         }
         overlay.upsertCard(card.key, null);
         pushCounterChips(card);
-        refreshPendingChips();
+        refreshCardList();
 
         executor.execute(() -> {
             if (fetchArtVersions) {
                 try {
                     for (ScryfallLookup.CardSummary version
                             : ScryfallLookup.artVersions(card.name)) {
+                        if (card.typeLine.isEmpty() && !version.typeLine.isEmpty()) {
+                            card.typeLine = version.typeLine;
+                        }
                         if (card.printingUrls.size() >= MAX_REFERENCE_IMAGES_PER_CARD) {
                             break;
                         }
@@ -400,12 +429,24 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         cardByPrinting.put(key, card);
         overlay.upsertCard(key, null);
         pushGameChips(card, player);
-        refreshPendingChips();
+        refreshCardList();
 
         executor.execute(() -> {
+            Bitmap tokenArt = null;
+            if (player.cardArtCropUrl != null) {
+                try {
+                    tokenArt = ImageFetcher.fetch(player.cardArtCropUrl);
+                } catch (IOException e) {
+                    Log.w(TAG, "No art crop for the life token; the scan stands in.", e);
+                }
+            }
+
             try {
                 for (ScryfallLookup.CardSummary version
                         : ScryfallLookup.artVersions(card.name)) {
+                    if (card.typeLine.isEmpty() && !version.typeLine.isEmpty()) {
+                        card.typeLine = version.typeLine;
+                    }
                     if (card.printingUrls.size() >= GAME_MAX_REFERENCE_IMAGES_PER_CARD) {
                         break;
                     }
@@ -418,6 +459,14 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 Log.w(TAG, "No art versions; tracking only the chosen printing.", e);
             }
             downloadImages(card);
+
+            Bitmap art = tokenArt != null ? tokenArt : referenceBitmaps.get(card.printingId);
+            if (art != null) {
+                Bitmap finalArt = art;
+                // Life and tax are read on the UI thread, where all their mutations happen.
+                runOnUiThread(() -> overlay.upsertToken(
+                        player.id, player.name, finalArt, player.life, player.commanderTax()));
+            }
         });
     }
 
@@ -446,6 +495,8 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         } else {
             Log.w(TAG, "No scan could be downloaded for " + card.name);
         }
+        // The card list shows these scans as thumbnails; an open list picks them up now.
+        refreshCardList();
 
         synchronized (sessionLock) {
             databaseDirty = true;
@@ -610,6 +661,13 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     @Override
     public void onFocusChanged(String key) {
         focusedKey = key;
+        if (game != null) {
+            GamePlayer player = playersByCardKey.get(key);
+            if (player != null) {
+                focusedPlayerId = player.id;
+                overlay.setFocusedToken(player.id);
+            }
+        }
         runOnUiThread(() -> {
             panel.setVisibility(View.VISIBLE);
             refreshCounterUi();
@@ -624,30 +682,107 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         pendingTapY = y;
     }
 
-    // -------------------------------------------------------------------- pending-placement chips
+    @Override
+    public void onTokenTapped(int playerId) {
+        if (game == null) {
+            return;
+        }
+        focusedPlayerId = playerId;
+        overlay.setFocusedToken(playerId);
 
-    /** Cards identified but not yet located; a chip tap arms manual placement for that card. */
-    private void refreshPendingChips() {
-        runOnUiThread(() -> {
-            candidateRow.removeAllViews();
-            int shown = 0;
-            for (ActiveCard card : cardOrder) {
-                if (card.located) {
-                    continue;
-                }
-                Button chip = new Button(this);
-                GamePlayer owner = playersByCardKey.get(card.key);
-                chip.setText(owner == null ? card.name : owner.name + " · " + card.name);
-                chip.setAllCaps(false);
-                chip.setOnClickListener(v -> {
-                    pendingPlacementKey = card.key;
-                    updateStatusLine();
-                });
-                candidateRow.addView(chip);
-                shown++;
+        // Selecting the token also selects the player's tracked card, when there is one, so the
+        // orange focus border and the panel agree about who is selected.
+        GamePlayer player = game.playerById(playerId);
+        if (player != null && player.hasCard()) {
+            String key = playerId + "|" + player.cardId;
+            if (cardsByKey.containsKey(key)) {
+                focusedKey = key;
+                overlay.setFocus(key);
             }
-            candidatesScroll.setVisibility(shown > 0 ? View.VISIBLE : View.GONE);
+        }
+        panel.setVisibility(View.VISIBLE);
+        refreshGameUi();
+        updateStatusLine();
+    }
+
+    @Override
+    public void onTokenDropped(int playerId, float x, float y) {
+        // Anchoring needs a hit test against the AR frame, which only the GL thread can run.
+        pendingTokenX = x;
+        pendingTokenY = y;
+        pendingTokenPlayerId = playerId;
+    }
+
+    // ---------------------------------------------------------------------------- the card list
+
+    /**
+     * Every known card as an openable detail list: scan thumbnail, name (with its owner in game
+     * mode), type line and set when known, and whether it is tracking. Tapping a row places an
+     * unlocated card (arming the existing surface-tap flow) or focuses a tracking one.
+     */
+    private void refreshCardList() {
+        runOnUiThread(() -> {
+            cardsToggle.setVisibility(cardOrder.isEmpty() ? View.GONE : View.VISIBLE);
+            cardsToggle.setText(getString(R.string.ar_cards_toggle, cardOrder.size()));
+            boolean open = cardListOpen && !cardOrder.isEmpty();
+            cardListScroll.setVisibility(open ? View.VISIBLE : View.GONE);
+            if (!open) {
+                return;
+            }
+
+            cardList.removeAllViews();
+            for (ActiveCard card : cardOrder) {
+                View row = getLayoutInflater().inflate(R.layout.ar_card_row, cardList, false);
+
+                ImageView thumb = row.findViewById(R.id.ar_row_thumb);
+                Bitmap scan = referenceBitmaps.get(card.printingId);
+                if (scan == null) {
+                    scan = referenceBitmaps.get(card.key);
+                }
+                thumb.setImageBitmap(scan);
+
+                TextView title = row.findViewById(R.id.ar_row_title);
+                GamePlayer owner = playersByCardKey.get(card.key);
+                title.setText(owner == null ? card.name : owner.name + " · " + card.name);
+
+                TextView subtitle = row.findViewById(R.id.ar_row_subtitle);
+                String details = cardDetailsLine(card);
+                subtitle.setText(details);
+                subtitle.setVisibility(details.isEmpty() ? View.GONE : View.VISIBLE);
+
+                TextView status = row.findViewById(R.id.ar_row_status);
+                status.setText(card.located
+                        ? R.string.ar_card_tracking
+                        : R.string.ar_card_tap_to_place);
+
+                row.setOnClickListener(v -> onCardRowTapped(card));
+                cardList.addView(row);
+            }
         });
+    }
+
+    /** Type line and set when Scryfall told us; the keyword list as a fallback; else empty. */
+    private String cardDetailsLine(ActiveCard card) {
+        String details = card.typeLine;
+        if (!card.setName.isEmpty()) {
+            details = details.isEmpty() ? card.setName : details + " · " + card.setName;
+        }
+        if (details.isEmpty() && !card.keywords.isEmpty()) {
+            details = String.join(", ", card.keywords);
+        }
+        return details;
+    }
+
+    private void onCardRowTapped(ActiveCard card) {
+        cardListOpen = false;
+        if (card.located) {
+            overlay.setFocus(card.key);
+            onFocusChanged(card.key);
+        } else {
+            pendingPlacementKey = card.key;
+        }
+        refreshCardList();
+        updateStatusLine();
     }
 
     private void updateStatusLine() {
@@ -662,10 +797,16 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         String focused = focusedKey;
         ActiveCard card = focused == null ? null : cardsByKey.get(focused);
         if (game != null) {
-            GamePlayer player = focused == null ? null : playersByCardKey.get(focused);
-            statusText.setText(card == null || player == null
-                    ? getString(R.string.ar_status_game)
-                    : getString(R.string.ar_status_game_tracking, card.name, player.name));
+            GamePlayer player = focusedPlayer();
+            if (player == null) {
+                statusText.setText(R.string.ar_status_game);
+            } else if (card == null || playersByCardKey.get(card.key) != player) {
+                // Selected via their life token, with no tracked commander to name.
+                statusText.setText(player.name);
+            } else {
+                statusText.setText(
+                        getString(R.string.ar_status_game_tracking, card.name, player.name));
+            }
             return;
         }
         statusText.setText(card == null
@@ -687,8 +828,8 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     }
 
     private GamePlayer focusedPlayer() {
-        String key = focusedKey;
-        return key == null ? null : playersByCardKey.get(key);
+        int playerId = focusedPlayerId;
+        return game == null || playerId < 0 ? null : game.playerById(playerId);
     }
 
     private void wireCounterControls() {
@@ -921,8 +1062,9 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         }
         lifeLabel.setText(getString(R.string.ar_life_chip, player.life));
         taxLabel.setText(getString(R.string.ar_tax_chip, player.commanderTax()));
+        overlay.upsertToken(player.id, player.name, null, player.life, player.commanderTax());
         ActiveCard card = focusedKey == null ? null : cardsByKey.get(focusedKey);
-        if (card != null) {
+        if (card != null && playersByCardKey.get(card.key) == player) {
             pushGameChips(card, player);
         }
     }
@@ -1012,7 +1154,8 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 }
                 updateTrackedImages(frame);
                 handlePendingTap(frame);
-                overlay.postGeometry(computePoses(camera));
+                handlePendingTokenDrop(frame);
+                overlay.postGeometry(computePoses(camera), computeTokenPoses(camera));
             }
         }
 
@@ -1069,13 +1212,20 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             if (focusedKey == null) {
                 focusedKey = card.key;
                 overlay.setFocus(card.key);
+                if (game != null) {
+                    GamePlayer player = playersByCardKey.get(card.key);
+                    if (player != null) {
+                        focusedPlayerId = player.id;
+                        overlay.setFocusedToken(player.id);
+                    }
+                }
             }
             runOnUiThread(() -> {
                 if (card.key.equals(focusedKey)) {
                     panel.setVisibility(View.VISIBLE);
                     refreshCounterUi();
                 }
-                refreshPendingChips();
+                refreshCardList();
                 updateStatusLine();
             });
         }
@@ -1123,6 +1273,73 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                     return;
                 }
             }
+        }
+
+        /**
+         * Drops a dragged life token onto the table: a hit test where the finger let go, an
+         * anchor on success (replacing any previous spot), back to the tray on a miss.
+         */
+        private void handlePendingTokenDrop(Frame frame) {
+            int playerId = pendingTokenPlayerId;
+            if (playerId < 0) {
+                return;
+            }
+            pendingTokenPlayerId = -1;
+
+            for (HitResult hit : frame.hitTest(pendingTokenX, pendingTokenY)) {
+                Trackable trackable = hit.getTrackable();
+                boolean usable = (trackable instanceof Plane
+                        && ((Plane) trackable).isPoseInPolygon(hit.getHitPose()))
+                        || trackable instanceof Point;
+                if (usable) {
+                    Anchor previous = tokenAnchors.put(playerId, hit.createAnchor());
+                    if (previous != null) {
+                        previous.detach();
+                    }
+                    overlay.setTokenPlaced(playerId, true);
+                    return;
+                }
+            }
+
+            // No surface there: the token goes back to the tray, and any old anchor dies with
+            // the spot it marked.
+            Anchor orphan = tokenAnchors.remove(playerId);
+            if (orphan != null) {
+                orphan.detach();
+            }
+            overlay.setTokenPlaced(playerId, false);
+            runOnUiThread(() -> Toast.makeText(ArCardActivity.this,
+                    R.string.ar_token_place_failed, Toast.LENGTH_SHORT).show());
+        }
+
+        /** Screen positions for the anchored life tokens, sized by their projected width. */
+        private List<CardOverlayView.TokenPose> computeTokenPoses(Camera camera) {
+            List<CardOverlayView.TokenPose> result = new ArrayList<>();
+            if (tokenAnchors.isEmpty() || camera.getTrackingState() != TrackingState.TRACKING) {
+                return result;
+            }
+
+            for (Map.Entry<Integer, Anchor> entry : tokenAnchors.entrySet()) {
+                Anchor anchor = entry.getValue();
+                if (anchor.getTrackingState() != TrackingState.TRACKING) {
+                    continue;
+                }
+                Pose pose = anchor.getPose();
+                float[] center = projectToScreen(new float[] {pose.tx(), pose.ty(), pose.tz()});
+                if (center == null) {
+                    continue;
+                }
+                float[] edge = projectToScreen(
+                        pose.transformPoint(new float[] {TOKEN_WIDTH_M / 2f, 0, 0}));
+                if (edge == null) {
+                    continue;
+                }
+                float widthPx = 2f * (float) Math.hypot(
+                        edge[0] - center[0], edge[1] - center[1]);
+                result.add(new CardOverlayView.TokenPose(
+                        entry.getKey(), center[0], center[1], widthPx));
+            }
+            return result;
         }
 
         private List<CardOverlayView.CardPose> computePoses(Camera camera) {

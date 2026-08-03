@@ -19,6 +19,20 @@ public class ScryfallLookupTest {
         assertEquals("Lightning Bolt", card.name);
         assertEquals("https://img/bolt.jpg", card.imageUrl);
         assertEquals(0, card.keywords.size());
+        // Absent type line and set name parse as empty, never null.
+        assertEquals("", card.typeLine);
+        assertEquals("", card.setName);
+    }
+
+    @Test
+    public void parsesTypeLineAndSetName() throws Exception {
+        JSONObject json = new JSONObject(
+                "{\"id\":\"abc\",\"name\":\"Lightning Bolt\","
+                        + "\"type_line\":\"Instant\",\"set_name\":\"Magic 2010\","
+                        + "\"image_uris\":{\"normal\":\"https://img/bolt.jpg\"}}");
+        ScryfallLookup.CardSummary card = ScryfallLookup.parseCard(json);
+        assertEquals("Instant", card.typeLine);
+        assertEquals("Magic 2010", card.setName);
     }
 
     @Test
