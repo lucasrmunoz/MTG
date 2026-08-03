@@ -10,6 +10,8 @@ interface SearchResultsProps {
   totalMatches: number;
   vendorId: string;
   finish: Finish;
+  /** Off in contexts like the commander picker, where a grid of price dashes reads as broken. */
+  showPrices?: boolean | undefined;
   onSelect: (card: Card) => void;
 }
 
@@ -26,6 +28,7 @@ export function SearchResults({
   totalMatches,
   vendorId,
   finish,
+  showPrices = true,
   onSelect,
 }: SearchResultsProps) {
   const truncated = totalMatches > cards.length;
@@ -42,7 +45,9 @@ export function SearchResults({
       <p className="text-foreground/50 text-sm mb-4">
         {truncated
           ? "Showing the first page only — type more of the name to narrow it down."
-          : "Pick a card to see its printings and prices."}
+          : showPrices
+            ? "Pick a card to see its printings and prices."
+            : "Pick the card you meant."}
       </p>
 
       <div className="max-h-[36rem] overflow-y-auto">
@@ -67,9 +72,11 @@ export function SearchResults({
                   className="rounded w-full h-auto"
                 />
               )}
-              <p className="text-sm text-orange font-semibold mt-1">
-                {formatPrice(priceFor(card.prices, vendorId, finish))}
-              </p>
+              {showPrices && (
+                <p className="text-sm text-orange font-semibold mt-1">
+                  {formatPrice(priceFor(card.prices, vendorId, finish))}
+                </p>
+              )}
             </button>
           ))}
         </div>

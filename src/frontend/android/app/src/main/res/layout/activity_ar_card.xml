@@ -81,6 +81,7 @@
             </HorizontalScrollView>
 
         <LinearLayout
+            android:id="@+id/ar_stat_row"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal">
@@ -109,6 +110,38 @@
                 android:id="@+id/ar_stat_custom"
                 style="@style/ArStatButton"
                 android:text="@string/ar_stat_custom" />
+        </LinearLayout>
+
+        <!-- Game mode only: the focused player's life stepper. -->
+        <LinearLayout
+            android:id="@+id/ar_life_row"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/ar_life_label"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textColor="#FFFFFF"
+                android:textSize="14sp" />
+
+            <Button
+                android:id="@+id/ar_life_minus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="48dp"
+                android:text="@string/ar_tax_minus" />
+
+            <Button
+                android:id="@+id/ar_life_plus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="48dp"
+                android:text="@string/ar_tax_plus" />
         </LinearLayout>
 
         <LinearLayout
@@ -153,6 +186,7 @@
         </LinearLayout>
 
             <TextView
+                android:id="@+id/ar_hint_text"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="@string/ar_hint"

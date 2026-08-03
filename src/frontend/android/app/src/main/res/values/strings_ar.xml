@@ -25,8 +25,14 @@
     <string name="ar_tax_minus">−</string>
     <string name="ar_tax_plus">+</string>
     <string name="ar_tax_chip">Tax +%1$d</string>
-    <string name="ar_chip_remove">%1$s ✕</string>
-    <string name="ar_hint">Tap a chip to remove one · tap the card to place/float · pinch to zoom</string>
+    <string name="ar_life_chip">Life %1$d</string>
+    <string name="ar_bad_game_launch">The AR game was opened with a broken player list.</string>
+    <string name="ar_status_game">Point the camera at each commander — its owner\'s badge appears</string>
+    <string name="ar_status_game_tracking">%1$s — %2$s</string>
+    <string name="ar_game_hint">Tap a commander to select its player · − / + adjust life and tax</string>
+    <string name="ar_no_definition">This mechanic isn\'t in the glossary yet.</string>
+    <string name="ar_remove_one">Remove one</string>
+    <string name="ar_hint">Tap a keyword for its meaning · ✕ chips remove on tap · tap the card to place/float · pinch to zoom</string>
 
     <string-array name="ar_keyword_presets">
         <item>Flying</item>

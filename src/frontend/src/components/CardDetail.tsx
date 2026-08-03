@@ -1,6 +1,7 @@
 "use client";
 
 import { CardImage } from "@/components/CardImage";
+import { KeywordChip } from "@/components/KeywordChip";
 import { powerToughness, primaryType } from "@/lib/cards";
 import { formatPrice, priceFor, vendorLabel, type Finish } from "@/lib/pricing";
 import type { Card, VendorInfo } from "@/lib/types";
@@ -73,7 +74,13 @@ export function CardDetail({
           )}
 
           {card.keywords.length > 0 && (
-            <DetailRow label="Keywords">{card.keywords.join(", ")}</DetailRow>
+            <DetailRow label="Keywords">
+              <span className="flex flex-wrap gap-2">
+                {card.keywords.map((keyword) => (
+                  <KeywordChip key={keyword} keyword={keyword} />
+                ))}
+              </span>
+            </DetailRow>
           )}
 
           {card.faces.length > 0 ? (

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArtVersionGrid } from "@/components/ArtVersionGrid";
 import { CardDetail } from "@/components/CardDetail";
@@ -293,6 +294,7 @@ export default function Home() {
           id: version.id,
           imageUrl: version.imageUrl,
         })),
+        keywords: card.keywords,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not open the AR view.");
@@ -377,8 +379,14 @@ export default function Home() {
               onRandom={(colors, mode) => void handleRandomCard(colors, mode)}
             />
 
-            {cardAr !== null && (
-              <div className="mb-6 sm:mb-8">
+            <div className="mb-6 sm:mb-8 flex flex-wrap gap-3">
+              <Link
+                href="/game"
+                className="bg-background border border-purple/40 hover:border-purple text-foreground font-semibold px-4 py-2 rounded text-sm transition-colors"
+              >
+                Commander game
+              </Link>
+              {cardAr !== null && (
                 <button
                   type="button"
                   onClick={() => void handleScanAr()}
@@ -386,8 +394,8 @@ export default function Home() {
                 >
                   Scan a card in AR
                 </button>
-              </div>
-            )}
+              )}
+            </div>
 
             {error !== null && (
               <div className="bg-red-deck/20 border border-red-deck/50 text-red-deck rounded-lg p-4 mb-8">

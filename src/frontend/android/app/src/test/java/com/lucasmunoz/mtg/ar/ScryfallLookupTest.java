@@ -18,6 +18,19 @@ public class ScryfallLookupTest {
         assertEquals("abc", card.id);
         assertEquals("Lightning Bolt", card.name);
         assertEquals("https://img/bolt.jpg", card.imageUrl);
+        assertEquals(0, card.keywords.size());
+    }
+
+    @Test
+    public void parsesKeywords() throws Exception {
+        JSONObject json = new JSONObject(
+                "{\"id\":\"abc\",\"name\":\"Serra Angel\","
+                        + "\"keywords\":[\"Flying\",\"Vigilance\"],"
+                        + "\"image_uris\":{\"normal\":\"https://img/serra.jpg\"}}");
+        ScryfallLookup.CardSummary card = ScryfallLookup.parseCard(json);
+        assertEquals(2, card.keywords.size());
+        assertEquals("Flying", card.keywords.get(0));
+        assertEquals("Vigilance", card.keywords.get(1));
     }
 
     @Test

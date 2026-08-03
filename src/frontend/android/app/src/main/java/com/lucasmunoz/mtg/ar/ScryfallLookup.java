@@ -27,11 +27,14 @@ final class ScryfallLookup {
         final String id;
         final String name;
         final String imageUrl;
+        /** The card's own keyword abilities, for glossary popups in the AR screen. */
+        final List<String> keywords;
 
-        CardSummary(String id, String name, String imageUrl) {
+        CardSummary(String id, String name, String imageUrl, List<String> keywords) {
             this.id = id;
             this.name = name;
             this.imageUrl = imageUrl;
+            this.keywords = keywords;
         }
     }
 
@@ -95,7 +98,15 @@ final class ScryfallLookup {
         if (id.isEmpty() || name.isEmpty()) {
             return null;
         }
-        return new CardSummary(id, name, imageUrl(json));
+
+        List<String> keywords = new ArrayList<>();
+        JSONArray keywordArray = json.optJSONArray("keywords");
+        if (keywordArray != null) {
+            for (int i = 0; i < keywordArray.length(); i++) {
+                keywords.add(keywordArray.getString(i));
+            }
+        }
+        return new CardSummary(id, name, imageUrl(json), keywords);
     }
 
     /** Package-visible for unit tests. */

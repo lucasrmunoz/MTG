@@ -2,6 +2,7 @@ package com.lucasmunoz.mtg.ar;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.opengl.GLES20;
@@ -76,6 +77,12 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     public static final String EXTRA_IMAGE_URL = "imageUrl";
     /** JSON array of {id, imageUrl} — the printings to register as reference images. */
     public static final String EXTRA_PRINTINGS = "printings";
+    /** JSON array of the card's own keywords, for glossary popups. */
+    public static final String EXTRA_KEYWORDS = "keywords";
+    /** JSON array of players — presence switches the screen into Commander game mode. */
+    public static final String EXTRA_GAME_PLAYERS = "gamePlayers";
+    /** JSON array of players with their latest life and casts, published via setResult. */
+    public static final String EXTRA_GAME_RESULT = "gameResult";
 
     private static final String TAG = "ArCardActivity";
 
@@ -85,12 +92,19 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
 
     private static final int CAMERA_PERMISSION_CODE = 41;
     private static final int MAX_REFERENCE_IMAGES_PER_CARD = 12;
+    /**
+     * Game mode tracks up to six commanders at once, so each gets fewer reference images than a
+     * single-card session — six cards at twelve images each would stall feature extraction.
+     */
+    private static final int GAME_MAX_REFERENCE_IMAGES_PER_CARD = 4;
 
     /** One card on (or headed for) the table. Tracking fields are guarded by sessionLock. */
     private static final class ActiveCard {
         final String key;
         final String name;
         volatile String printingId;
+        /** The card's own keyword abilities, offered with glossary definitions in the panel. */
+        final List<String> keywords = new CopyOnWriteArrayList<>();
         final Map<String, String> printingUrls = new ConcurrentHashMap<>();
         volatile boolean located;
         volatile float halfWidthM = CARD_WIDTH_M / 2f;
@@ -111,9 +125,19 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     private TextView statusText;
     private LinearLayout chipRow;
     private TextView taxLabel;
+    private TextView lifeLabel;
+    private View lifeRow;
+    private View statRow;
+    private View keywordButton;
+    private TextView hintText;
     private LinearLayout candidateRow;
     private View candidatesScroll;
     private View panel;
+
+    /** Non-null only in Commander game mode; the web layer owns it, this screen edits a copy. */
+    private GameSession game;
+    /** Which player each game-mode card belongs to, by the card's composite key. */
+    private final Map<String, GamePlayer> playersByCardKey = new ConcurrentHashMap<>();
 
     private final Object sessionLock = new Object();
     private Session session;
@@ -129,6 +153,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private CardIdentifier identifier;
     private CounterStore store;
+    private KeywordGlossary glossary;
     private boolean saveFailureReported;
 
     private final Map<String, ActiveCard> cardsByKey = new ConcurrentHashMap<>();
@@ -152,6 +177,11 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         statusText = findViewById(R.id.ar_status);
         chipRow = findViewById(R.id.ar_chip_row);
         taxLabel = findViewById(R.id.ar_tax_label);
+        lifeLabel = findViewById(R.id.ar_life_label);
+        lifeRow = findViewById(R.id.ar_life_row);
+        statRow = findViewById(R.id.ar_stat_row);
+        keywordButton = findViewById(R.id.ar_keyword);
+        hintText = findViewById(R.id.ar_hint_text);
         candidateRow = findViewById(R.id.ar_candidate_row);
         candidatesScroll = findViewById(R.id.ar_candidates);
         panel = findViewById(R.id.ar_panel);
@@ -167,14 +197,54 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
 
         applySystemBarInsets();
         store = new CounterStore(getFilesDir());
+        glossary = new KeywordGlossary(this);
         wireCounterControls();
         panel.setVisibility(View.GONE);
+
+        String gameJson = getIntent().getStringExtra(EXTRA_GAME_PLAYERS);
+        if (gameJson != null) {
+            try {
+                game = GameSession.fromJson(gameJson);
+            } catch (JSONException e) {
+                // Our own web code sent garbage: fail fast, the plugin resolves with the
+                // players it was given (no result extra means "nothing changed").
+                Log.w(TAG, "Malformed game payload.", e);
+                Toast.makeText(this, R.string.ar_bad_game_launch, Toast.LENGTH_LONG).show();
+                finish();
+                return;
+            }
+            enterGameMode();
+            return;
+        }
+
         statusText.setText(R.string.ar_status_scan);
 
-        // The scanner always runs: every confirmed card joins the scene by itself.
+        // The scanner always runs: every confirmed card joins the scene by itself. Game mode
+        // leaves it off — its cards are fixed, and OCR discoveries would fight the per-player
+        // reference keys.
         identifier = new CardIdentifier(executor, this::onCandidatesRecognized);
 
         addCardFromIntent();
+    }
+
+    /**
+     * Commander game mode: the panel trades stat and keyword counters for a life stepper, and
+     * every player's commander is registered for tracking up front. The latest state is
+     * published as the activity result after every change, so closing this screen in any way
+     * hands the web layer the freshest values.
+     */
+    private void enterGameMode() {
+        statRow.setVisibility(View.GONE);
+        keywordButton.setVisibility(View.GONE);
+        lifeRow.setVisibility(View.VISIBLE);
+        hintText.setText(R.string.ar_game_hint);
+        statusText.setText(R.string.ar_status_game);
+        publishGameResult();
+        for (GamePlayer player : game.players()) {
+            if (player.hasCard()) {
+                adoptGameCard(player);
+            }
+        }
     }
 
     /** A card opened from search joins immediately, with its art versions sent by the web side. */
@@ -199,6 +269,18 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 }
             } catch (JSONException e) {
                 Log.w(TAG, "Ignoring malformed printings payload.", e);
+            }
+        }
+
+        String keywordsJson = getIntent().getStringExtra(EXTRA_KEYWORDS);
+        if (keywordsJson != null) {
+            try {
+                JSONArray keywords = new JSONArray(keywordsJson);
+                for (int i = 0; i < keywords.length(); i++) {
+                    card.keywords.add(keywords.getString(i));
+                }
+            } catch (JSONException e) {
+                Log.w(TAG, "Ignoring malformed keywords payload.", e);
             }
         }
         adoptCard(card, false);
@@ -239,8 +321,10 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         for (ScryfallLookup.CardSummary candidate : candidates) {
             ActiveCard existing = findCardByName(candidate.name);
             if (existing == null) {
-                runOnUiThread(() -> adoptCard(
-                        new ActiveCard(candidate.id, candidate.name, candidate.imageUrl), true));
+                ActiveCard added =
+                        new ActiveCard(candidate.id, candidate.name, candidate.imageUrl);
+                added.keywords.addAll(candidate.keywords);
+                runOnUiThread(() -> adoptCard(added, true));
             } else if (existing.printingUrls.putIfAbsent(candidate.id, candidate.imageUrl)
                     == null) {
                 // A more precise reading — usually the collector line — named another printing
@@ -293,6 +377,45 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 } catch (IOException e) {
                     Log.w(TAG, "No art versions; tracking only the identified printing.", e);
                 }
+            }
+            downloadImages(card);
+        });
+    }
+
+    /**
+     * Registers one player's commander for tracking. Every key — the card's, its printings',
+     * the reference images' — is the composite "playerId|printingId", so two players running
+     * the same commander stay collision-free end to end. Which physical copy then binds to
+     * which player is arbitrary for identical printings; the placement chips are the deliberate
+     * escape hatch.
+     */
+    private void adoptGameCard(GamePlayer player) {
+        String key = player.id + "|" + player.cardId;
+        ActiveCard card = new ActiveCard(key, player.cardName, player.cardImageUrl);
+        if (cardsByKey.putIfAbsent(key, card) != null) {
+            return;
+        }
+        playersByCardKey.put(key, player);
+        cardOrder.add(card);
+        cardByPrinting.put(key, card);
+        overlay.upsertCard(key, null);
+        pushGameChips(card, player);
+        refreshPendingChips();
+
+        executor.execute(() -> {
+            try {
+                for (ScryfallLookup.CardSummary version
+                        : ScryfallLookup.artVersions(card.name)) {
+                    if (card.printingUrls.size() >= GAME_MAX_REFERENCE_IMAGES_PER_CARD) {
+                        break;
+                    }
+                    String versionKey = player.id + "|" + version.id;
+                    if (card.printingUrls.putIfAbsent(versionKey, version.imageUrl) == null) {
+                        cardByPrinting.put(versionKey, card);
+                    }
+                }
+            } catch (IOException e) {
+                Log.w(TAG, "No art versions; tracking only the chosen printing.", e);
             }
             downloadImages(card);
         });
@@ -513,7 +636,8 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                     continue;
                 }
                 Button chip = new Button(this);
-                chip.setText(card.name);
+                GamePlayer owner = playersByCardKey.get(card.key);
+                chip.setText(owner == null ? card.name : owner.name + " · " + card.name);
                 chip.setAllCaps(false);
                 chip.setOnClickListener(v -> {
                     pendingPlacementKey = card.key;
@@ -537,6 +661,13 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         }
         String focused = focusedKey;
         ActiveCard card = focused == null ? null : cardsByKey.get(focused);
+        if (game != null) {
+            GamePlayer player = focused == null ? null : playersByCardKey.get(focused);
+            statusText.setText(card == null || player == null
+                    ? getString(R.string.ar_status_game)
+                    : getString(R.string.ar_status_game_tracking, card.name, player.name));
+            return;
+        }
         statusText.setText(card == null
                 ? getString(R.string.ar_status_scan)
                 : getString(R.string.ar_status_tracking, card.name));
@@ -545,9 +676,19 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     // ----------------------------------------------------------------------------- counter panel
 
     private CardCounters focusedCounters() {
+        if (game != null) {
+            // Game mode has no per-printing counters, so every stat/keyword path no-ops and
+            // the persistent store is never touched.
+            return null;
+        }
         String key = focusedKey;
         ActiveCard card = key == null ? null : cardsByKey.get(key);
         return card == null ? null : store.get(card.printingId);
+    }
+
+    private GamePlayer focusedPlayer() {
+        String key = focusedKey;
+        return key == null ? null : playersByCardKey.get(key);
     }
 
     private void wireCounterControls() {
@@ -560,6 +701,8 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         findViewById(R.id.ar_keyword).setOnClickListener(v -> showKeywordDialog());
         findViewById(R.id.ar_tax_minus).setOnClickListener(v -> adjustCommanderCasts(-1));
         findViewById(R.id.ar_tax_plus).setOnClickListener(v -> adjustCommanderCasts(1));
+        findViewById(R.id.ar_life_minus).setOnClickListener(v -> adjustGameLife(-1));
+        findViewById(R.id.ar_life_plus).setOnClickListener(v -> adjustGameLife(1));
     }
 
     private void wireStatButton(int viewId, int power, int toughness) {
@@ -574,12 +717,47 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     }
 
     private void adjustCommanderCasts(int delta) {
+        if (game != null) {
+            GamePlayer player = focusedPlayer();
+            if (player == null) {
+                return;
+            }
+            player.adjustCasts(delta);
+            publishGameResult();
+            refreshGameUi();
+            return;
+        }
         CardCounters counters = focusedCounters();
         if (counters == null) {
             return;
         }
         counters.commanderCasts = Math.max(0, counters.commanderCasts + delta);
         persistAndRefresh();
+    }
+
+    private void adjustGameLife(int delta) {
+        GamePlayer player = focusedPlayer();
+        if (game == null || player == null) {
+            return;
+        }
+        player.adjustLife(delta);
+        publishGameResult();
+        refreshGameUi();
+    }
+
+    /**
+     * Stamps the latest game state onto the activity result. Called after every mutation, so
+     * any way this screen closes returns the freshest values; a serialisation failure keeps the
+     * previously published result rather than none at all.
+     */
+    private void publishGameResult() {
+        try {
+            Intent data = new Intent();
+            data.putExtra(EXTRA_GAME_RESULT, game.toJsonString());
+            setResult(RESULT_OK, data);
+        } catch (JSONException e) {
+            Log.w(TAG, "Could not serialise the game result.", e);
+        }
     }
 
     private void showCustomStatDialog() {
@@ -677,25 +855,86 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
 
     /** Rebuilds the focused card's tappable chip row and re-stamps its overlay chips. */
     private void refreshCounterUi() {
+        if (game != null) {
+            refreshGameUi();
+            return;
+        }
         CardCounters counters = focusedCounters();
         chipRow.removeAllViews();
         if (counters == null) {
             return;
         }
 
+        ActiveCard card = focusedKey == null ? null : cardsByKey.get(focusedKey);
+
+        // The card's own keywords first: tap for the glossary definition. They are part of the
+        // card, so there is nothing to remove.
+        if (card != null) {
+            for (String keyword : card.keywords) {
+                addChip(keyword, () -> showKeywordDefinition(keyword, null));
+            }
+        }
+
         for (String keyword : new ArrayList<>(counters.keywords)) {
-            addChip(keyword, () -> counters.removeKeyword(keyword));
+            addChip(keyword + " ◆",
+                    () -> showKeywordDefinition(keyword, () -> {
+                        counters.removeKeyword(keyword);
+                        persistAndRefresh();
+                    }));
         }
         for (CardCounters.StatCounter stat : new ArrayList<>(counters.stats)) {
             String label = stat.count == 1 ? stat.label() : stat.label() + " ×" + stat.count;
-            addChip(label, () -> counters.removeStat(stat.power, stat.toughness));
+            addChip(label + " ✕", () -> {
+                counters.removeStat(stat.power, stat.toughness);
+                persistAndRefresh();
+            });
         }
         taxLabel.setText(getString(R.string.ar_tax_chip, counters.commanderTax()));
 
-        ActiveCard card = focusedKey == null ? null : cardsByKey.get(focusedKey);
         if (card != null) {
             pushCounterChips(card);
         }
+    }
+
+    /**
+     * The glossary popup: what a keyword does, with "Remove one" offered only for keyword
+     * counters — a card's printed keywords are not removable.
+     */
+    private void showKeywordDefinition(String keyword, Runnable onRemove) {
+        String definition = glossary.lookup(keyword);
+        AlertDialog.Builder builder = new AlertDialog.Builder(this)
+                .setTitle(keyword)
+                .setMessage(definition != null ? definition : getString(R.string.ar_no_definition))
+                .setPositiveButton(android.R.string.ok, null);
+        if (onRemove != null) {
+            builder.setNegativeButton(R.string.ar_remove_one, (dialog, which) -> onRemove.run());
+        }
+        builder.show();
+    }
+
+    /** Game-mode panel: the focused player's life and tax under their commander's badge. */
+    private void refreshGameUi() {
+        chipRow.removeAllViews();
+        GamePlayer player = focusedPlayer();
+        if (player == null) {
+            return;
+        }
+        lifeLabel.setText(getString(R.string.ar_life_chip, player.life));
+        taxLabel.setText(getString(R.string.ar_tax_chip, player.commanderTax()));
+        ActiveCard card = focusedKey == null ? null : cardsByKey.get(focusedKey);
+        if (card != null) {
+            pushGameChips(card, player);
+        }
+    }
+
+    /** The badge over a commander: owner's name highlighted, then life, then tax when owed. */
+    private void pushGameChips(ActiveCard card, GamePlayer player) {
+        List<String> labels = new ArrayList<>();
+        labels.add(getString(R.string.ar_life_chip, player.life));
+        if (player.commanderCasts > 0) {
+            labels.add(getString(R.string.ar_tax_chip, player.commanderTax()));
+        }
+        overlay.setChips(card.key, labels, player.name);
     }
 
     /** Sends one card's counter chips to the overlay, where they render above the card. */
@@ -714,14 +953,11 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         overlay.setChips(card.key, labels, summary);
     }
 
-    private void addChip(String label, Runnable onRemove) {
+    private void addChip(String label, Runnable onTap) {
         Button chip = new Button(this);
-        chip.setText(getString(R.string.ar_chip_remove, label));
+        chip.setText(label);
         chip.setAllCaps(false);
-        chip.setOnClickListener(v -> {
-            onRemove.run();
-            persistAndRefresh();
-        });
+        chip.setOnClickListener(v -> onTap.run());
         chipRow.addView(chip);
     }
 
@@ -807,7 +1043,8 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                         overlay.upsertCard(card.key, recognised);
                     }
                 }
-                if (!image.getName().equals(card.printingId)) {
+                // Game mode skips this: its counters belong to the player, not the printing.
+                if (game == null && !image.getName().equals(card.printingId)) {
                     // A different printing of this card: its own counters take over.
                     card.printingId = image.getName();
                     runOnUiThread(() -> {

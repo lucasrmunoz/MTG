@@ -106,9 +106,14 @@ public final class CardCounters {
         return sum;
     }
 
-    /** The extra generic mana this commander costs right now: two per previous cast. */
+    /** The commander-tax rule in one place: two generic mana per previous cast. */
+    public static int taxForCasts(int casts) {
+        return casts * 2;
+    }
+
+    /** The extra generic mana this commander costs right now. */
     public int commanderTax() {
-        return commanderCasts * 2;
+        return taxForCasts(commanderCasts);
     }
 
     /** True when there is nothing worth persisting, so the store can drop the entry. */
