@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">MTG Card Lookup</string>
+    <string name="title_activity_main">MTG Card Lookup</string>
+    <string name="package_name">com.lucasmunoz.mtg</string>
+    <string name="custom_url_scheme">com.lucasmunoz.mtg</string>
+</resources>

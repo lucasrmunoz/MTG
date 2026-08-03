@@ -29,6 +29,7 @@ src/
     src/lib/         API client, pricing helpers, card helpers
     src/components/  SearchForm, SearchResults, CardDetail, ArtVersionGrid, PreviewPanel,
                      PriceControls
+    android/         Capacitor Android project wrapping the static export into an APK
 docs/
   HOW-TO-RUN.md
 ```
@@ -105,13 +106,14 @@ sheen is a visual cue, not real foil artwork.
 
 ## Hosting
 
-The frontend can run with no server at all. `src/frontend/src/lib/api.ts` picks its data source from
-`NEXT_PUBLIC_API_BASE_URL`:
+The frontend can run with no server at all. `src/frontend/src/lib/api.ts` picks its data source
+from two env vars:
 
 | Mode | When | Vendors |
 |---|---|---|
 | Through `Mtg.Api` | `NEXT_PUBLIC_API_BASE_URL` is set — `.env.development` sets it, so `next dev` uses it | All three |
-| Straight to Scryfall | The variable is unset, which is the default for a production build | TCGplayer only |
+| Android app | `NEXT_PUBLIC_MOBILE_APP=true` — set by `npm run app:build` | All three, fetched by the device itself |
+| Straight to Scryfall | Neither is set, which is the default for a production build | TCGplayer only |
 
 The serverless mode exists because **GitHub Pages serves static files only**, so `Mtg.Api` cannot run
 there. What the browser can reach on its own decides the rest, and only Scryfall cooperates:
@@ -119,9 +121,71 @@ there. What the browser can reach on its own decides the rest, and only Scryfall
 - **Scryfall** sends `access-control-allow-origin: *`, so card data, art versions and TCGplayer
   prices all work browser-direct.
 - **Mana Pool** sends no `Access-Control-Allow-Origin` at all and its preflight returns 405, so a
-  browser is hard-blocked. There is no client-side workaround.
+  browser is hard-blocked. There is no client-side workaround in a browser.
 - **Card Kingdom** does allow CORS, but its only endpoint is the 66 MB catalogue — every visitor
-  would download it. Not viable.
+  would download it. Not viable on a public site.
+
+The Android app escapes both constraints — see the next section.
+
+## Android app
+
+The same frontend ships as an installable APK via [Capacitor](https://capacitorjs.com/): the
+static export runs in a WebView, and native access restores the two vendors the web-only build
+loses, with no `Mtg.Api` behind it.
+
+- **Mana Pool** is fetched live through Capacitor's native HTTP (`src/lib/sources/manaPool.ts`) —
+  CORS does not exist outside the browser sandbox. Same chunking and id rules as
+  `ManaPoolLiveSource`.
+- **Card Kingdom**'s 66 MB catalogue is downloaded by the device *on demand* — the first time the
+  vendor is picked in the dropdown, never at startup — then parsed off the stream row by row
+  (`src/lib/sources/cardKingdom.ts`; one giant `JSON.parse` of 149k rows would eat hundreds of MB
+  and can kill a phone WebView). Parsed prices live in **one cache file**, overwritten in place on
+  every successful download — never a second copy. The cache counts as fresh for 24 hours;
+  selecting the vendor after that re-downloads, and a **↻ Refresh** button next to the price
+  picker replaces it on demand. If a re-download fails, the stale list keeps serving; the UI's
+  "as of Xh ago" label says so.
+- **TCGplayer** rides along on the Scryfall response, as everywhere.
+- The random-card draw is enriched with the on-device vendors too, which even API mode cannot do.
+
+`src/frontend/src/lib/sources/nativeApp.ts` composes these and mirrors `/api/vendors`' shape and
+ordering, so the UI cannot tell the app apart from API mode. Build instructions:
+[docs/HOW-TO-RUN.md](docs/HOW-TO-RUN.md#building-the-android-app-apk).
+
+### AR: counters on physical cards
+
+App-only (needs an [ARCore-supported device](https://developers.google.com/ar/devices)): **View in
+AR** on a selected card opens the camera, finds that card on the table, and shows a zoomable
+virtual copy carrying its counters. Native side in `android/…/mtg/ar/`, bridge in
+`src/frontend/src/lib/ar.ts`.
+
+- **Known images only.** Recognition is ARCore reference-image tracking against the card's own
+  printings, registered at runtime from their Scryfall scans (63 mm physical width) — never "that
+  rectangle looks like a card". Every art version rides along, so whichever copy you own is
+  found; tapping a surface places the card manually when tracking can't lock (sleeve glare,
+  low-detail full-art printings).
+- **Scan-first mode.** "Scan a card in AR" opens the camera with no card chosen: on-device OCR
+  (ML Kit, bundled — hence most of the APK's size) reads title lines off the frames, each is
+  confirmed through Scryfall's fuzzy lookup — which forgives OCR misreads like it forgives
+  typos — and every confirmed card becomes a tappable chip; several cards in view give several
+  chips. The collector line ("L 0195" / "SPM • EN") is read too and resolved to the *exact*
+  printing, which is what gets basic lands right — "Island" matches hundreds of artworks, "SPM
+  195" is one card. Picking a chip loads its printings and continues exactly like opening from
+  search. Still known-cards-only: OCR merely decides which known card to register, nothing is
+  guessed from shape.
+- **Floating or placed.** The copy floats upright above the physical card — pinch to zoom — and a
+  tap lays it perspective-correct on top of the card; tap again to lift it. Rendering is
+  screen-space from the projected pose (no 3D engine); the camera feed is the standard ARCore GL
+  background quad.
+- **Counters.** Keyword counters (preset list + free text), stat counters in every sign
+  combination (`+X/+X`, `-X/-X`, `+X/-X`, `-X/+X`, merged by kind with counts), and commander
+  tax tracked as casts-from-command-zone (+2 each). Chips show on the virtual card; the panel
+  edits them.
+- **Counters survive.** State is keyed by printing id in one file (`ar-counters.json` in app
+  storage, temp-file-renamed whole on every change — the Card Kingdom cache policy). Put the
+  phone down, pick it up next game: recognising the card brings its counters back.
+
+Tokens ("give me 13 zombies on the table") are the planned next phase and will need a real 3D
+renderer; counters deliberately did not wait for that.
 
 ### Deploying to GitHub Pages
 

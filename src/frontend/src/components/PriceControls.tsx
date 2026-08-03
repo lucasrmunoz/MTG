@@ -11,6 +11,14 @@ interface PriceControlsProps {
   onFinishChange: (finish: Finish) => void;
   /** "compact" is the inline variant used in the Art Versions header. */
   size: "normal" | "compact";
+  /**
+   * Re-downloads the selected vendor's cached catalogue. Only the Android app passes this — on
+   * the web the catalogue lives server-side or not at all — and the button only renders for a
+   * cached vendor that has finished its first load.
+   */
+  onRefresh?: (() => void) | undefined;
+  /** True while a manual catalogue refresh is downloading. */
+  refreshing?: boolean | undefined;
 }
 
 /**
@@ -24,6 +32,8 @@ export function PriceControls({
   onVendorChange,
   onFinishChange,
   size,
+  onRefresh,
+  refreshing,
 }: PriceControlsProps) {
   const compact = size === "compact";
   // min-w-0 lets the select shrink below the width of its longest option; without it the row has a
@@ -105,6 +115,20 @@ export function PriceControls({
             {freshnessLabel(selected)}
           </span>
         )
+      )}
+
+      {onRefresh !== undefined && selected !== undefined && !selected.live && selected.loaded && (
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={refreshing === true}
+          title="Download this vendor's price catalogue again now, replacing the cached copy"
+          className={`bg-background border border-orange/30 hover:border-orange disabled:opacity-60 text-foreground rounded transition-colors cursor-pointer ${
+            compact ? "px-2 py-1 text-[10px]" : "px-3 py-1.5 text-xs"
+          }`}
+        >
+          {refreshing === true ? "Refreshing…" : "↻ Refresh"}
+        </button>
       )}
     </div>
   );

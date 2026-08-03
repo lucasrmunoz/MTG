@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ArtVersionGrid } from "@/components/ArtVersionGrid";
 import { CardDetail } from "@/components/CardDetail";
 import { KeywordsSection } from "@/components/KeywordsSection";
@@ -9,7 +9,14 @@ import { PriceControls } from "@/components/PriceControls";
 import { RandomCardControls } from "@/components/RandomCardControls";
 import { SearchForm } from "@/components/SearchForm";
 import { SearchResults } from "@/components/SearchResults";
-import { fetchArtVersions, fetchRandomCard, fetchVendors, searchCards } from "@/lib/api";
+import {
+  cachedVendors,
+  fetchArtVersions,
+  fetchRandomCard,
+  fetchVendors,
+  searchCards,
+} from "@/lib/api";
+import { cardAr } from "@/lib/ar";
 import type { ColorMatchMode } from "@/lib/colors";
 import { matchesFinish, priceFor, type Finish } from "@/lib/pricing";
 import type { ArtVersion, Card, CardSearchResult, VendorInfo } from "@/lib/types";
@@ -36,6 +43,7 @@ export default function Home() {
   const [vendors, setVendors] = useState<VendorInfo[]>([]);
   const [vendorId, setVendorId] = useState("");
   const [finish, setFinish] = useState<Finish>("all");
+  const [refreshingPrices, setRefreshingPrices] = useState(false);
 
   // Identifies the in-flight search or card selection, so a slow response from an earlier one
   // cannot overwrite the results of a later one.
@@ -77,6 +85,82 @@ export default function Home() {
       }
     };
   }, []);
+
+  /** Re-stamps cached vendor prices onto whatever is currently on screen. */
+  const restampCachedPrices = useCallback(() => {
+    if (cachedVendors === null) {
+      return;
+    }
+    const apply = cachedVendors.apply;
+    setResults((current) =>
+      current === null ? null : { ...current, cards: apply(current.cards) },
+    );
+    setCard((current) => (current === null ? null : (apply([current])[0] ?? current)));
+    setArtVersions((current) => apply(current));
+  }, []);
+
+  // A cached vendor's catalogue downloads the first time that vendor is selected — never at
+  // startup — so picking Card Kingdom in the app is what triggers its one-off 66 MB fetch. Once
+  // the load lands, its prices are stamped onto whatever is already on screen.
+  useEffect(() => {
+    if (cachedVendors === null) {
+      return;
+    }
+    const selected = vendors.find((vendor) => vendor.id === vendorId);
+    if (selected === undefined || selected.live || selected.loaded) {
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        await cachedVendors.ensure(vendorId);
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Could not load vendor prices.");
+          // Fall back to a vendor that has prices, so the picker does not sit on a permanent
+          // "loading" spinner for a download that already failed.
+          setVendorId(vendors.find((vendor) => vendor.loaded)?.id ?? vendorId);
+        }
+        return;
+      }
+      if (cancelled) {
+        return;
+      }
+      restampCachedPrices();
+      try {
+        const list = await fetchVendors();
+        if (!cancelled) {
+          setVendors(list);
+        }
+      } catch {
+        // Vendor metadata failing to re-read only leaves the freshness label stale.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [vendorId, vendors, restampCachedPrices]);
+
+  /** Re-downloads the selected vendor's catalogue, replacing the single cached copy. */
+  async function handleRefreshPrices() {
+    if (cachedVendors === null || refreshingPrices) {
+      return;
+    }
+
+    setRefreshingPrices(true);
+    try {
+      await cachedVendors.refresh(vendorId);
+      restampCachedPrices();
+      setVendors(await fetchVendors());
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not refresh vendor prices.");
+    } finally {
+      setRefreshingPrices(false);
+    }
+  }
 
   /** Opens one card from the match list and loads its printings. */
   async function selectCard(chosen: Card) {
@@ -191,6 +275,42 @@ export default function Home() {
     void selectCard(drawn);
   }
 
+  /**
+   * Opens the native AR screen for the selected card (app build only). Every art version rides
+   * along as a reference image, so whichever printing is physically on the table is recognised.
+   */
+  async function handleViewInAr() {
+    if (cardAr === null || card === null || card.imageUrl === null) {
+      return;
+    }
+
+    try {
+      await cardAr.open({
+        cardId: card.id,
+        cardName: card.name,
+        imageUrl: selectedArtUrl ?? card.imageUrl,
+        printings: artVersions.map((version) => ({
+          id: version.id,
+          imageUrl: version.imageUrl,
+        })),
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not open the AR view.");
+    }
+  }
+
+  /** Opens the AR scanner with no card preselected; the camera identifies one by its title. */
+  async function handleScanAr() {
+    if (cardAr === null) {
+      return;
+    }
+    try {
+      await cardAr.scan();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not open the AR scanner.");
+    }
+  }
+
   /** Closes the open card and returns to the match grid, discarding any in-flight art load. */
   function backToResults() {
     requestIdRef.current++;
@@ -238,6 +358,8 @@ export default function Home() {
             onVendorChange={setVendorId}
             onFinishChange={setFinish}
             size="normal"
+            onRefresh={cachedVendors === null ? undefined : () => void handleRefreshPrices()}
+            refreshing={refreshingPrices}
           />
         </div>
 
@@ -254,6 +376,18 @@ export default function Home() {
               loading={randomLoading}
               onRandom={(colors, mode) => void handleRandomCard(colors, mode)}
             />
+
+            {cardAr !== null && (
+              <div className="mb-6 sm:mb-8">
+                <button
+                  type="button"
+                  onClick={() => void handleScanAr()}
+                  className="bg-background border border-purple/40 hover:border-purple text-foreground font-semibold px-4 py-2 rounded text-sm transition-colors cursor-pointer"
+                >
+                  Scan a card in AR
+                </button>
+              </div>
+            )}
 
             {error !== null && (
               <div className="bg-red-deck/20 border border-red-deck/50 text-red-deck rounded-lg p-4 mb-8">
@@ -284,6 +418,15 @@ export default function Home() {
                   <h2 className="text-orange font-semibold text-sm uppercase tracking-wide">
                     Selected Card
                   </h2>
+                  {cardAr !== null && card.imageUrl !== null && (
+                    <button
+                      type="button"
+                      onClick={() => void handleViewInAr()}
+                      className="bg-background border border-purple/40 hover:border-purple text-foreground font-semibold px-4 py-2 rounded text-sm transition-colors cursor-pointer"
+                    >
+                      View in AR
+                    </button>
+                  )}
                   {results !== null && results.cards.length > 1 && (
                     <button
                       type="button"

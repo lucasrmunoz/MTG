@@ -13,8 +13,14 @@ const projectRoot = dirname(fileURLToPath(import.meta.url));
 const forGitHubPages = process.env.GITHUB_PAGES === "true";
 const basePath = process.env.PAGES_BASE_PATH ?? "/MTG";
 
+// The Android app (Capacitor) serves the same static export from the WebView's root, so it needs
+// `output: "export"` but no base path. NEXT_PUBLIC_ so that client code can pick the on-device
+// data source at build time, mirroring how NEXT_PUBLIC_API_BASE_URL picks the API client.
+const forMobileApp = process.env.NEXT_PUBLIC_MOBILE_APP === "true";
+
 const nextConfig: NextConfig = {
   ...(forGitHubPages ? { output: "export" as const, basePath, assetPrefix: basePath } : {}),
+  ...(forMobileApp ? { output: "export" as const } : {}),
   turbopack: {
     root: projectRoot,
   },

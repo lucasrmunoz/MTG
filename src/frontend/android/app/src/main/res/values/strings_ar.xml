@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ar_bad_launch">The AR view was opened without a card.</string>
+    <string name="ar_close">✕</string>
+    <string name="ar_status_searching">Looking for %1$s — point the camera at it, or tap a surface to place it</string>
+    <string name="ar_status_scan">Point the camera at a card — names it reads appear below; tap one</string>
+    <string name="ar_status_tracking">Tracking %1$s</string>
+    <string name="ar_camera_unavailable">The camera is not available right now.</string>
+    <string name="ar_camera_denied">AR needs the camera; permission was denied.</string>
+    <string name="ar_install_declined">AR needs Google Play Services for AR.</string>
+    <string name="ar_unavailable">AR is not supported on this device.</string>
+    <string name="ar_image_download_failed">Could not download the card images.</string>
+    <string name="ar_save_failed">Could not save counters to storage.</string>
+    <string name="ar_stat_pp">+1/+1</string>
+    <string name="ar_stat_mm">-1/-1</string>
+    <string name="ar_stat_pm">+1/-1</string>
+    <string name="ar_stat_mp">-1/+1</string>
+    <string name="ar_stat_custom">±X/±X…</string>
+    <string name="ar_custom_stat_title">Add a stat counter</string>
+    <string name="ar_keyword_button">Keyword…</string>
+    <string name="ar_keyword_title">Add a keyword counter</string>
+    <string name="ar_keyword_hint">e.g. Goaded</string>
+    <string name="ar_keyword_custom">Custom…</string>
+    <string name="ar_tax_minus">−</string>
+    <string name="ar_tax_plus">+</string>
+    <string name="ar_tax_chip">Tax +%1$d</string>
+    <string name="ar_chip_remove">%1$s ✕</string>
+    <string name="ar_hint">Tap a chip to remove one · tap the card to place/float · pinch to zoom</string>
+
+    <string-array name="ar_keyword_presets">
+        <item>Flying</item>
+        <item>First strike</item>
+        <item>Double strike</item>
+        <item>Deathtouch</item>
+        <item>Lifelink</item>
+        <item>Menace</item>
+        <item>Trample</item>
+        <item>Vigilance</item>
+        <item>Reach</item>
+        <item>Haste</item>
+        <item>Hexproof</item>
+        <item>Indestructible</item>
+        <item>Stun</item>
+        <item>Shield</item>
+        <item>Finality</item>
+    </string-array>
+</resources>

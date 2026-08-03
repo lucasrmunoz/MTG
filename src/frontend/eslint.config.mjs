@@ -5,7 +5,9 @@ import nextTs from "eslint-config-next/typescript";
 const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
-  globalIgnores([".next/**", "out/**", "build/**", "next-env.d.ts"]),
+  // android/ is the generated Capacitor project; its build intermediates include copies of the
+  // web bundle, which are not ours to lint.
+  globalIgnores([".next/**", "out/**", "build/**", "android/**", "next-env.d.ts"]),
 ]);
 
 export default eslintConfig;

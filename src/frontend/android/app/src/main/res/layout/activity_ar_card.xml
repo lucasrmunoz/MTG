@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/ar_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <android.opengl.GLSurfaceView
+        android:id="@+id/ar_surface"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <com.lucasmunoz.mtg.ar.CardOverlayView
+        android:id="@+id/ar_overlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <TextView
+        android:id="@+id/ar_status"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="48dp"
+        android:layout_marginHorizontal="56dp"
+        android:background="#CC1A1A2E"
+        android:padding="10dp"
+        android:textColor="#FFFFFF"
+        android:textSize="13sp" />
+
+    <Button
+        android:id="@+id/ar_close"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:layout_margin="8dp"
+        android:minWidth="0dp"
+        android:text="@string/ar_close" />
+
+    <LinearLayout
+        android:id="@+id/ar_bottom"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:background="#E6151528"
+        android:orientation="vertical">
+
+        <!-- Scan mode: card names read off the camera, tap one to lock on. -->
+        <HorizontalScrollView
+            android:id="@+id/ar_candidates"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#E6151528"
+            android:padding="8dp"
+            android:scrollbars="none"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:id="@+id/ar_candidate_row"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal" />
+        </HorizontalScrollView>
+
+        <LinearLayout
+            android:id="@+id/ar_panel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#E6151528"
+            android:orientation="vertical"
+            android:padding="8dp">
+
+            <HorizontalScrollView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:scrollbars="none">
+
+                <LinearLayout
+                    android:id="@+id/ar_chip_row"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal" />
+            </HorizontalScrollView>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/ar_stat_pp"
+                style="@style/ArStatButton"
+                android:text="@string/ar_stat_pp" />
+
+            <Button
+                android:id="@+id/ar_stat_mm"
+                style="@style/ArStatButton"
+                android:text="@string/ar_stat_mm" />
+
+            <Button
+                android:id="@+id/ar_stat_pm"
+                style="@style/ArStatButton"
+                android:text="@string/ar_stat_pm" />
+
+            <Button
+                android:id="@+id/ar_stat_mp"
+                style="@style/ArStatButton"
+                android:text="@string/ar_stat_mp" />
+
+            <Button
+                android:id="@+id/ar_stat_custom"
+                style="@style/ArStatButton"
+                android:text="@string/ar_stat_custom" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/ar_keyword"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textAllCaps="false"
+                android:text="@string/ar_keyword_button" />
+
+            <View
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:layout_weight="1" />
+
+            <Button
+                android:id="@+id/ar_tax_minus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="48dp"
+                android:text="@string/ar_tax_minus" />
+
+            <TextView
+                android:id="@+id/ar_tax_label"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:paddingHorizontal="8dp"
+                android:textColor="#FFFFFF"
+                android:textSize="14sp" />
+
+            <Button
+                android:id="@+id/ar_tax_plus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="48dp"
+                android:text="@string/ar_tax_plus" />
+        </LinearLayout>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/ar_hint"
+                android:textColor="#99FFFFFF"
+                android:textSize="11sp" />
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>
