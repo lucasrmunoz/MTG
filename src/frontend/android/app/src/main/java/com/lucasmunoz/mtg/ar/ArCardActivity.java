@@ -5,6 +5,7 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
+import android.graphics.RectF;
 import android.opengl.GLES20;
 import android.opengl.GLSurfaceView;
 import android.opengl.Matrix;
@@ -47,6 +48,7 @@ import com.google.ar.core.exceptions.UnavailableUserDeclinedInstallationExceptio
 import com.lucasmunoz.mtg.R;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -155,6 +157,9 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     private volatile float pendingTokenX;
     private volatile float pendingTokenY;
 
+    /** Titles the scanner is currently asking Scryfall about, for the status line. */
+    private volatile List<String> pendingLookupTitles = Collections.emptyList();
+
     private final Object sessionLock = new Object();
     private Session session;
     /** True when reference images changed since the session last configured. Guarded by lock. */
@@ -234,18 +239,20 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 finish();
                 return;
             }
-            enterGameMode();
-            return;
         }
 
-        statusText.setText(R.string.ar_status_scan);
+        // The scanner always runs, in game mode too: any table card can join the scene with
+        // its own counters. Commander names are filtered out of its candidates — those are
+        // already tracked under per-player keys.
+        identifier = new CardIdentifier(
+                executor, this::onCandidatesRecognized, this::onScanActivity);
 
-        // The scanner always runs: every confirmed card joins the scene by itself. Game mode
-        // leaves it off — its cards are fixed, and OCR discoveries would fight the per-player
-        // reference keys.
-        identifier = new CardIdentifier(executor, this::onCandidatesRecognized);
-
-        addCardFromIntent();
+        if (game != null) {
+            enterGameMode();
+        } else {
+            statusText.setText(R.string.ar_status_scan);
+            addCardFromIntent();
+        }
     }
 
     /**
@@ -286,7 +293,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             try {
                 JSONArray printings = new JSONArray(printingsJson);
                 for (int i = 0; i < printings.length()
-                        && card.printingUrls.size() < MAX_REFERENCE_IMAGES_PER_CARD; i++) {
+                        && card.printingUrls.size() < maxReferenceImagesPerCard(); i++) {
                     JSONObject printing = printings.getJSONObject(i);
                     card.printingUrls.putIfAbsent(
                             printing.getString("id"), printing.getString("imageUrl"));
@@ -343,6 +350,11 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     /** Every card the scanner has confirmed so far; new ones join the scene automatically. */
     private void onCandidatesRecognized(List<ScryfallLookup.CardSummary> candidates) {
         for (ScryfallLookup.CardSummary candidate : candidates) {
+            if (isCommanderName(candidate.name)) {
+                // Commanders are already tracked under composite per-player keys; letting OCR
+                // enrich them with raw printing ids would corrupt that keying.
+                continue;
+            }
             ActiveCard existing = findCardByName(candidate.name);
             if (existing == null) {
                 ActiveCard added =
@@ -375,6 +387,45 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         return null;
     }
 
+    /**
+     * Live scanner feedback, off the main thread: green outlines over readable titles and a
+     * status line naming what Scryfall is being asked about. Null boxes mean a lookup settled
+     * without a fresh OCR pass — the outlines on screen stay as they are.
+     */
+    private void onScanActivity(List<float[]> titleBoxes, List<String> pendingTitles) {
+        pendingLookupTitles = pendingTitles;
+        if (titleBoxes != null) {
+            List<RectF> regions = new ArrayList<>(titleBoxes.size());
+            for (float[] box : titleBoxes) {
+                regions.add(new RectF(box[0], box[1], box[2], box[3]));
+            }
+            overlay.setScanRegions(regions);
+        }
+        runOnUiThread(this::updateStatusLine);
+    }
+
+    private boolean isCommanderName(String name) {
+        if (game == null) {
+            return false;
+        }
+        for (GamePlayer player : game.players()) {
+            if (player.cardName != null && player.cardName.equalsIgnoreCase(name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** A game-mode card owned by a player, as opposed to one the scanner found on the table. */
+    private boolean isGameCard(String key) {
+        return playersByCardKey.containsKey(key);
+    }
+
+    /** Game mode shares the image budget across up to six commanders plus scanned cards. */
+    private int maxReferenceImagesPerCard() {
+        return game != null ? GAME_MAX_REFERENCE_IMAGES_PER_CARD : MAX_REFERENCE_IMAGES_PER_CARD;
+    }
+
     /** Registers a card and starts fetching its art; it appears once tracking locks on. */
     private void adoptCard(ActiveCard card, boolean fetchArtVersions) {
         if (cardsByKey.putIfAbsent(card.key, card) != null) {
@@ -396,7 +447,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                         if (card.typeLine.isEmpty() && !version.typeLine.isEmpty()) {
                             card.typeLine = version.typeLine;
                         }
-                        if (card.printingUrls.size() >= MAX_REFERENCE_IMAGES_PER_CARD) {
+                        if (card.printingUrls.size() >= maxReferenceImagesPerCard()) {
                             break;
                         }
                         if (card.printingUrls.putIfAbsent(version.id, version.imageUrl) == null) {
@@ -666,6 +717,10 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             if (player != null) {
                 focusedPlayerId = player.id;
                 overlay.setFocusedToken(player.id);
+            } else {
+                // A scanned table card took focus: the panel shows its counters, no player.
+                focusedPlayerId = -1;
+                overlay.setFocusedToken(-1);
             }
         }
         runOnUiThread(() -> {
@@ -691,17 +746,19 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         overlay.setFocusedToken(playerId);
 
         // Selecting the token also selects the player's tracked card, when there is one, so the
-        // orange focus border and the panel agree about who is selected.
+        // orange focus border and the panel agree about who is selected. Otherwise any card
+        // focus is cleared — a player is selected now, not a scanned card.
         GamePlayer player = game.playerById(playerId);
-        if (player != null && player.hasCard()) {
-            String key = playerId + "|" + player.cardId;
-            if (cardsByKey.containsKey(key)) {
-                focusedKey = key;
-                overlay.setFocus(key);
-            }
+        String key = player != null && player.hasCard() ? playerId + "|" + player.cardId : null;
+        if (key != null && cardsByKey.containsKey(key)) {
+            focusedKey = key;
+            overlay.setFocus(key);
+        } else {
+            focusedKey = null;
+            overlay.setFocus(null);
         }
         panel.setVisibility(View.VISIBLE);
-        refreshGameUi();
+        refreshCounterUi();
         updateStatusLine();
     }
 
@@ -798,32 +855,48 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         ActiveCard card = focused == null ? null : cardsByKey.get(focused);
         if (game != null) {
             GamePlayer player = focusedPlayer();
-            if (player == null) {
-                statusText.setText(R.string.ar_status_game);
-            } else if (card == null || playersByCardKey.get(card.key) != player) {
-                // Selected via their life token, with no tracked commander to name.
-                statusText.setText(player.name);
+            if (player != null) {
+                statusText.setText(card != null && playersByCardKey.get(card.key) == player
+                        ? getString(R.string.ar_status_game_tracking, card.name, player.name)
+                        // Selected via their life token, with no tracked commander to name.
+                        : player.name);
+            } else if (card != null) {
+                // A scanned table card is focused; same wording as scan mode.
+                statusText.setText(getString(R.string.ar_status_tracking, card.name));
             } else {
+                String checking = checkingStatus();
                 statusText.setText(
-                        getString(R.string.ar_status_game_tracking, card.name, player.name));
+                        checking != null ? checking : getString(R.string.ar_status_game));
             }
             return;
         }
-        statusText.setText(card == null
-                ? getString(R.string.ar_status_scan)
-                : getString(R.string.ar_status_tracking, card.name));
+        if (card != null) {
+            statusText.setText(getString(R.string.ar_status_tracking, card.name));
+            return;
+        }
+        String checking = checkingStatus();
+        statusText.setText(checking != null ? checking : getString(R.string.ar_status_scan));
+    }
+
+    /** "Reading X — checking Scryfall…" while lookups are in flight, or null when idle. */
+    private String checkingStatus() {
+        List<String> titles = pendingLookupTitles;
+        if (titles.isEmpty()) {
+            return null;
+        }
+        return getString(R.string.ar_status_checking, titles.get(titles.size() - 1));
     }
 
     // ----------------------------------------------------------------------------- counter panel
 
     private CardCounters focusedCounters() {
-        if (game != null) {
-            // Game mode has no per-printing counters, so every stat/keyword path no-ops and
-            // the persistent store is never touched.
+        String key = focusedKey;
+        if (key == null || isGameCard(key)) {
+            // Commanders carry player life and tax, not per-printing counters; cards the
+            // scanner found get counters in game mode too, exactly like scan mode.
             return null;
         }
-        String key = focusedKey;
-        ActiveCard card = key == null ? null : cardsByKey.get(key);
+        ActiveCard card = cardsByKey.get(key);
         return card == null ? null : store.get(card.printingId);
     }
 
@@ -857,23 +930,21 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         });
     }
 
+    /** The tax stepper serves whichever panel is showing: a player's casts or card counters. */
     private void adjustCommanderCasts(int delta) {
-        if (game != null) {
-            GamePlayer player = focusedPlayer();
-            if (player == null) {
-                return;
-            }
-            player.adjustCasts(delta);
-            publishGameResult();
-            refreshGameUi();
-            return;
-        }
         CardCounters counters = focusedCounters();
-        if (counters == null) {
+        if (counters != null) {
+            counters.commanderCasts = Math.max(0, counters.commanderCasts + delta);
+            persistAndRefresh();
             return;
         }
-        counters.commanderCasts = Math.max(0, counters.commanderCasts + delta);
-        persistAndRefresh();
+        GamePlayer player = focusedPlayer();
+        if (player == null) {
+            return;
+        }
+        player.adjustCasts(delta);
+        publishGameResult();
+        refreshGameUi();
     }
 
     private void adjustGameLife(int delta) {
@@ -997,8 +1068,16 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     /** Rebuilds the focused card's tappable chip row and re-stamps its overlay chips. */
     private void refreshCounterUi() {
         if (game != null) {
-            refreshGameUi();
-            return;
+            // The panel follows the focused target: a player (via commander or token) gets the
+            // life/tax rows, a scanned table card gets the normal counter controls.
+            boolean gameTarget = focusedPlayerId >= 0;
+            lifeRow.setVisibility(gameTarget ? View.VISIBLE : View.GONE);
+            statRow.setVisibility(gameTarget ? View.GONE : View.VISIBLE);
+            keywordButton.setVisibility(gameTarget ? View.GONE : View.VISIBLE);
+            if (gameTarget) {
+                refreshGameUi();
+                return;
+            }
         }
         CardCounters counters = focusedCounters();
         chipRow.removeAllViews();
@@ -1186,8 +1265,8 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                         overlay.upsertCard(card.key, recognised);
                     }
                 }
-                // Game mode skips this: its counters belong to the player, not the printing.
-                if (game == null && !image.getName().equals(card.printingId)) {
+                // Commanders skip this: their counters belong to the player, not the printing.
+                if (!isGameCard(card.key) && !image.getName().equals(card.printingId)) {
                     // A different printing of this card: its own counters take over.
                     card.printingId = image.getName();
                     runOnUiThread(() -> {
@@ -1214,10 +1293,8 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 overlay.setFocus(card.key);
                 if (game != null) {
                     GamePlayer player = playersByCardKey.get(card.key);
-                    if (player != null) {
-                        focusedPlayerId = player.id;
-                        overlay.setFocusedToken(player.id);
-                    }
+                    focusedPlayerId = player != null ? player.id : -1;
+                    overlay.setFocusedToken(focusedPlayerId);
                 }
             }
             runOnUiThread(() -> {

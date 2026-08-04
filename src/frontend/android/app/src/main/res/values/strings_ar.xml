@@ -29,7 +29,8 @@
     <string name="ar_bad_game_launch">The AR game was opened with a broken player list.</string>
     <string name="ar_status_game">Point the camera at each commander — its owner\'s badge appears</string>
     <string name="ar_status_game_tracking">%1$s — %2$s</string>
-    <string name="ar_game_hint">Tap a commander or life token to select its player · − / + adjust life and tax · drag tokens onto the table</string>
+    <string name="ar_game_hint">Tap a commander or life token to select its player · − / + adjust life and tax · drag tokens onto the table · point at any card to scan it in</string>
+    <string name="ar_status_checking">Reading “%1$s” — checking Scryfall…</string>
     <string name="ar_cards_toggle">Cards (%1$d)</string>
     <string name="ar_card_tracking">Tracking</string>
     <string name="ar_card_tap_to_place">Tap to place</string>

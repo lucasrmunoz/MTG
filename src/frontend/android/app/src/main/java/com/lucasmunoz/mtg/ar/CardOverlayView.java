@@ -9,6 +9,7 @@ import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.Rect;
 import android.graphics.RectF;
+import android.os.SystemClock;
 import android.util.AttributeSet;
 import android.view.GestureDetector;
 import android.view.MotionEvent;
@@ -142,6 +143,13 @@ public final class CardOverlayView extends View {
     private final Paint tokenSurface = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint tokenLifeText = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint tokenSmallText = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint scanBorder = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+    /** Titles the scanner spotted this pass; stale ones stop drawing rather than lingering. */
+    private volatile List<RectF> scanRegions = Collections.emptyList();
+    private volatile long scanRegionsAtMs;
+    /** Just past the OCR cadence (700 ms), so live regions refresh before they expire. */
+    private static final long SCAN_REGION_TTL_MS = 900;
     private final Matrix placeMatrix = new Matrix();
     private final RectF tokenRect = new RectF();
     private final Rect tokenSrcRect = new Rect();
@@ -176,6 +184,9 @@ public final class CardOverlayView extends View {
         tokenLifeText.setShadowLayer(dp(2), 0, dp(1), Color.argb(200, 0, 0, 0));
         tokenSmallText.setColor(Color.WHITE);
         tokenSmallText.setTextAlign(Paint.Align.CENTER);
+        scanBorder.setStyle(Paint.Style.STROKE);
+        scanBorder.setStrokeWidth(dp(2.5f));
+        scanBorder.setColor(Color.argb(220, 46, 204, 113));
         touchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
 
         scaleDetector = new ScaleGestureDetector(context,
@@ -266,6 +277,13 @@ public final class CardOverlayView extends View {
     void postGeometry(List<CardPose> newPoses, List<TokenPose> newTokenPoses) {
         poses = newPoses;
         tokenPoses = newTokenPoses;
+        postInvalidate();
+    }
+
+    /** Green outlines over the card titles the scanner can currently read. */
+    void setScanRegions(List<RectF> regions) {
+        scanRegions = regions;
+        scanRegionsAtMs = SystemClock.elapsedRealtime();
         postInvalidate();
     }
 
@@ -391,6 +409,11 @@ public final class CardOverlayView extends View {
 
     @Override
     protected void onDraw(Canvas canvas) {
+        if (SystemClock.elapsedRealtime() - scanRegionsAtMs <= SCAN_REGION_TTL_MS) {
+            for (RectF region : scanRegions) {
+                canvas.drawRoundRect(region, dp(6), dp(6), scanBorder);
+            }
+        }
         for (CardPose pose : poses) {
             RenderState state = renders.get(pose.key);
             if (state == null || state.bitmap == null) {

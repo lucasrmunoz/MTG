@@ -1,8 +1,10 @@
 package com.lucasmunoz.mtg.ar;
 
+import android.graphics.Rect;
 import android.media.Image;
 import android.os.SystemClock;
 import android.util.Log;
+import com.google.ar.core.Coordinates2d;
 import com.google.ar.core.Frame;
 import com.google.ar.core.exceptions.NotYetAvailableException;
 import com.google.mlkit.vision.common.InputImage;
@@ -35,6 +37,16 @@ final class CardIdentifier {
         void onCandidates(List<ScryfallLookup.CardSummary> candidates);
     }
 
+    interface ScanListener {
+        /**
+         * Live scanning feedback, called off the main thread. After each OCR pass, titleBoxes
+         * holds a view-space {left, top, right, bottom} box per plausible card title in frame;
+         * when a Scryfall lookup settles the call carries null boxes (the outlines on screen
+         * are still current) with the refreshed pending list.
+         */
+        void onScanActivity(List<float[]> titleBoxes, List<String> pendingTitles);
+    }
+
     private static final String TAG = "CardIdentifier";
 
     /** How often to OCR a frame; more brings no benefit at hand-held steadiness. */
@@ -50,6 +62,7 @@ final class CardIdentifier {
             TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
     private final ExecutorService lookupExecutor;
     private final Listener listener;
+    private final ScanListener scanListener;
 
     private volatile boolean recognizing;
     private long lastAttemptMs;
@@ -68,6 +81,8 @@ final class CardIdentifier {
     /** Readings Scryfall already rejected, so noise lines are not re-queried every frame. */
     private final Set<String> rejected = new HashSet<>();
     private final Set<String> pending = new HashSet<>();
+    /** What each pending lookup is about, human-readable, for the "checking …" status line. */
+    private final Map<String, String> pendingDisplay = new LinkedHashMap<>();
     /**
      * Candidates keyed by card name. A collector-line hit ("SPM 195") names the exact printing
      * on the table and replaces a fuzzy name hit for the same card, which for a basic land would
@@ -75,9 +90,10 @@ final class CardIdentifier {
      */
     private final Map<String, Match> matchedByName = new LinkedHashMap<>();
 
-    CardIdentifier(ExecutorService lookupExecutor, Listener listener) {
+    CardIdentifier(ExecutorService lookupExecutor, Listener listener, ScanListener scanListener) {
         this.lookupExecutor = lookupExecutor;
         this.listener = listener;
+        this.scanListener = scanListener;
     }
 
     /** Called from the GL thread once per rendered frame; does nothing most of the time. */
@@ -94,11 +110,23 @@ final class CardIdentifier {
             return;
         }
 
+        // Where the sensor image lands on screen, captured now — the frame is only valid on
+        // this thread during this update. Three corners pin down the affine display transform.
+        int imageWidth = image.getWidth();
+        int imageHeight = image.getHeight();
+        float[] cornerViews = new float[6];
+        frame.transformCoordinates2d(
+                Coordinates2d.IMAGE_PIXELS,
+                new float[] {0, 0, imageWidth, 0, 0, imageHeight},
+                Coordinates2d.VIEW,
+                cornerViews);
+
         lastAttemptMs = now;
         recognizing = true;
         InputImage input = InputImage.fromMediaImage(image, ROTATION_DEGREES);
         recognizer.process(input)
-                .addOnSuccessListener(this::handleText)
+                .addOnSuccessListener(text ->
+                        handleText(text, imageWidth, imageHeight, cornerViews))
                 .addOnCompleteListener(task -> {
                     // The Image backs InputImage until processing completes; close it only now.
                     image.close();
@@ -106,7 +134,8 @@ final class CardIdentifier {
                 });
     }
 
-    private void handleText(Text text) {
+    private void handleText(Text text, int imageWidth, int imageHeight, float[] cornerViews) {
+        List<float[]> titleBoxes = new ArrayList<>();
         List<String> numbers = new ArrayList<>();
         List<String> setCodes = new ArrayList<>();
 
@@ -118,6 +147,14 @@ final class CardIdentifier {
             // lines and rules text, which fuzzy lookup would happily mis-match.
             String title = TitleHeuristics.clean(block.getLines().get(0).getText());
             if (title != null) {
+                Rect box = block.getBoundingBox();
+                if (box != null) {
+                    titleBoxes.add(ScanGeometry.imageBoxToView(
+                            ScanGeometry.rotatedBoxToImage(
+                                    new float[] {box.left, box.top, box.right, box.bottom},
+                                    imageHeight, ROTATION_DEGREES),
+                            imageWidth, imageHeight, cornerViews));
+                }
                 scheduleTitleLookup(title);
             }
 
@@ -138,6 +175,12 @@ final class CardIdentifier {
         for (SetLineHeuristics.SetAndNumber pair : SetLineHeuristics.pair(numbers, setCodes)) {
             schedulePrintingLookup(pair);
         }
+
+        scanListener.onScanActivity(titleBoxes, snapshotPendingTitles());
+    }
+
+    private synchronized List<String> snapshotPendingTitles() {
+        return new ArrayList<>(pendingDisplay.values());
     }
 
     private void scheduleTitleLookup(String title) {
@@ -146,6 +189,7 @@ final class CardIdentifier {
             if (rejected.contains(key) || !pending.add(key)) {
                 return;
             }
+            pendingDisplay.put(key, title);
         }
         lookupExecutor.execute(() -> lookUp(key, false, () -> ScryfallLookup.findByFuzzyName(title)));
     }
@@ -156,6 +200,7 @@ final class CardIdentifier {
             if (rejected.contains(key) || !pending.add(key)) {
                 return;
             }
+            pendingDisplay.put(key, pair.setCode.toUpperCase() + " " + pair.collectorNumber);
         }
         lookupExecutor.execute(() -> lookUp(key, true,
                 () -> ScryfallLookup.bySetAndNumber(pair.setCode, pair.collectorNumber)));
@@ -171,6 +216,7 @@ final class CardIdentifier {
             List<ScryfallLookup.CardSummary> snapshot = null;
             synchronized (this) {
                 pending.remove(key);
+                pendingDisplay.remove(key);
                 if (card == null) {
                     rememberRejection(key);
                 } else {
@@ -185,8 +231,11 @@ final class CardIdentifier {
             Log.w(TAG, "Scryfall lookup failed for " + key, e);
             synchronized (this) {
                 pending.remove(key);
+                pendingDisplay.remove(key);
             }
         }
+        // Settled either way: the status line should stop saying this one is being checked.
+        scanListener.onScanActivity(null, snapshotPendingTitles());
     }
 
     /** Records a hit; an exact printing displaces a fuzzy hit for the same card name. */
