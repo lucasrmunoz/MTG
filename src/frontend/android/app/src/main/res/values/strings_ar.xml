@@ -34,6 +34,11 @@
     <string name="ar_cards_toggle">Cards (%1$d)</string>
     <string name="ar_card_tracking">Tracking</string>
     <string name="ar_card_tap_to_place">Tap to place</string>
+    <string name="ar_row_replace">Re-place</string>
+    <string name="ar_row_remove">✕</string>
+    <string name="ar_rescan">Rescan</string>
+    <string name="ar_rescan_toast">Retrying everything in view.</string>
+    <string name="ar_scan_unavailable">Card scanning is unavailable on this device.</string>
     <string name="ar_token_place_failed">No surface found there — the token went back to its tray.</string>
     <string name="ar_no_definition">This mechanic isn\'t in the glossary yet.</string>
     <string name="ar_remove_one">Remove one</string>

@@ -43,14 +43,35 @@
         android:background="#E6151528"
         android:orientation="vertical">
 
-        <!-- Every known card, openable as a detail list: tap a row to place or focus it. -->
-        <Button
-            android:id="@+id/ar_cards_toggle"
-            android:layout_width="wrap_content"
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:textAllCaps="false"
-            android:visibility="gone" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <!-- Every known card, openable as a detail list: tap a row to place or focus it. -->
+            <Button
+                android:id="@+id/ar_cards_toggle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:textAllCaps="false"
+                android:visibility="gone" />
+
+            <View
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:layout_weight="1" />
+
+            <!-- Clears the scanner's memory — removed and rejected readings get a fresh try. -->
+            <Button
+                android:id="@+id/ar_rescan"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="8dp"
+                android:textAllCaps="false"
+                android:text="@string/ar_rescan" />
+        </LinearLayout>
 
         <ScrollView
             android:id="@+id/ar_card_list_scroll"

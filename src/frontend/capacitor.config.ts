@@ -2,7 +2,7 @@ import type { CapacitorConfig } from "@capacitor/cli";
 
 const config: CapacitorConfig = {
   appId: "com.lucasmunoz.mtg",
-  appName: "MTG Card Lookup",
+  appName: "MTG Combat AR",
   // The Next static export produced by `npm run app:build`.
   webDir: "out",
   plugins: {

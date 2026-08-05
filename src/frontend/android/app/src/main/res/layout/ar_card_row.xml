@@ -48,4 +48,29 @@
         android:layout_marginStart="8dp"
         android:textColor="#E67E22"
         android:textSize="12sp" />
+
+    <Button
+        android:id="@+id/ar_row_replace"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:minWidth="0dp"
+        android:minHeight="0dp"
+        android:paddingHorizontal="10dp"
+        android:paddingVertical="6dp"
+        android:text="@string/ar_row_replace"
+        android:textAllCaps="false"
+        android:textSize="12sp" />
+
+    <Button
+        android:id="@+id/ar_row_remove"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:minWidth="0dp"
+        android:minHeight="0dp"
+        android:paddingHorizontal="10dp"
+        android:paddingVertical="6dp"
+        android:text="@string/ar_row_remove"
+        android:textSize="12sp" />
 </LinearLayout>

@@ -10,6 +10,10 @@ android {
         versionCode 1
         versionName "1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        ndk {
+            // ARCore-capable phones are arm64; OpenCV's other three ABIs would triple the APK.
+            abiFilters 'arm64-v8a'
+        }
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
@@ -43,6 +47,9 @@ dependencies {
     implementation "com.google.ar:core:1.54.0"
     // Bundled on-device OCR for scan mode; reads card titles with no network or Play download.
     implementation "com.google.mlkit:text-recognition:16.0.1"
+    // Card-quad detection for scan mode: contours find the physical card rectangle, and each
+    // quad is perspective-warped flat before OCR and image verification.
+    implementation "org.opencv:opencv:5.0.0.1"
     testImplementation "junit:junit:$junitVersion"
     // The real org.json for JVM unit tests; on the device it ships with the platform.
     testImplementation "org.json:json:20250517"

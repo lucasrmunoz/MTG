@@ -5,7 +5,6 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
-import android.graphics.RectF;
 import android.opengl.GLES20;
 import android.opengl.GLSurfaceView;
 import android.opengl.Matrix;
@@ -28,6 +27,7 @@ import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import com.google.ar.core.Anchor;
+import org.opencv.android.OpenCVLoader;
 import com.google.ar.core.ArCoreApk;
 import com.google.ar.core.AugmentedImage;
 import com.google.ar.core.AugmentedImageDatabase;
@@ -92,6 +92,8 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     /** A Magic card is 63mm x 88mm; ARCore wants the physical width of every reference image. */
     private static final float CARD_WIDTH_M = 0.063f;
     private static final float CARD_HEIGHT_M = 0.088f;
+    /** How high a Flying card hovers above its anchor — enough to read as airborne. */
+    private static final float FLY_HEIGHT_M = 0.05f;
 
     private static final int CAMERA_PERMISSION_CODE = 41;
     private static final int MAX_REFERENCE_IMAGES_PER_CARD = 12;
@@ -115,6 +117,10 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         volatile boolean located;
         volatile float halfWidthM = CARD_WIDTH_M / 2f;
         volatile float halfHeightM = CARD_HEIGHT_M / 2f;
+        /** Render-affecting abilities, from printed keywords plus keyword counters. Written on
+         *  the UI thread by updateAbilityFlags; the GL thread only reads them. */
+        volatile boolean flying;
+        volatile boolean reach;
         AugmentedImage trackedImage;
         Anchor anchor;
 
@@ -210,6 +216,12 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             cardListOpen = !cardListOpen;
             refreshCardList();
         });
+        findViewById(R.id.ar_rescan).setOnClickListener(v -> {
+            if (identifier != null) {
+                identifier.rescan();
+                Toast.makeText(this, R.string.ar_rescan_toast, Toast.LENGTH_SHORT).show();
+            }
+        });
         panel = findViewById(R.id.ar_panel);
         overlay = findViewById(R.id.ar_overlay);
         overlay.setListener(this);
@@ -243,9 +255,15 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
 
         // The scanner always runs, in game mode too: any table card can join the scene with
         // its own counters. Commander names are filtered out of its candidates — those are
-        // already tracked under per-player keys.
-        identifier = new CardIdentifier(
-                executor, this::onCandidatesRecognized, this::onScanActivity);
+        // already tracked under per-player keys. Quad detection needs OpenCV's native library;
+        // where it fails to load, scanning stays off and the rest of the screen still works.
+        if (OpenCVLoader.initLocal()) {
+            identifier = new CardIdentifier(
+                    executor, this::onCandidatesRecognized, this::onScanActivity);
+        } else {
+            Log.e(TAG, "OpenCV failed to initialise; card scanning is disabled.");
+            Toast.makeText(this, R.string.ar_scan_unavailable, Toast.LENGTH_LONG).show();
+        }
 
         if (game != null) {
             enterGameMode();
@@ -388,18 +406,14 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     }
 
     /**
-     * Live scanner feedback, off the main thread: green outlines over readable titles and a
-     * status line naming what Scryfall is being asked about. Null boxes mean a lookup settled
-     * without a fresh OCR pass — the outlines on screen stay as they are.
+     * Live scanner feedback, off the main thread: green outlines around the card-shaped quads
+     * the detector sees, and a status line naming what Scryfall is being asked about. Null
+     * outlines mean a lookup settled without a fresh pass — the ones on screen stay current.
      */
-    private void onScanActivity(List<float[]> titleBoxes, List<String> pendingTitles) {
+    private void onScanActivity(List<float[]> cardOutlines, List<String> pendingTitles) {
         pendingLookupTitles = pendingTitles;
-        if (titleBoxes != null) {
-            List<RectF> regions = new ArrayList<>(titleBoxes.size());
-            for (float[] box : titleBoxes) {
-                regions.add(new RectF(box[0], box[1], box[2], box[3]));
-            }
-            overlay.setScanRegions(regions);
+        if (cardOutlines != null) {
+            overlay.setScanQuads(cardOutlines);
         }
         runOnUiThread(this::updateStatusLine);
     }
@@ -435,6 +449,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         for (String printingId : card.printingUrls.keySet()) {
             cardByPrinting.put(printingId, card);
         }
+        updateAbilityFlags(card);
         overlay.upsertCard(card.key, null);
         pushCounterChips(card);
         refreshCardList();
@@ -478,6 +493,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         playersByCardKey.put(key, player);
         cardOrder.add(card);
         cardByPrinting.put(key, card);
+        updateAbilityFlags(card);
         overlay.upsertCard(key, null);
         pushGameChips(card, player);
         refreshCardList();
@@ -497,6 +513,12 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                         : ScryfallLookup.artVersions(card.name)) {
                     if (card.typeLine.isEmpty() && !version.typeLine.isEmpty()) {
                         card.typeLine = version.typeLine;
+                    }
+                    // Commanders arrive over the bridge without keywords; the first art version
+                    // supplies them, so a Flying commander renders airborne like any card.
+                    if (card.keywords.isEmpty() && !version.keywords.isEmpty()) {
+                        card.keywords.addAll(version.keywords);
+                        runOnUiThread(() -> updateAbilityFlags(card));
                     }
                     if (card.printingUrls.size() >= GAME_MAX_REFERENCE_IMAGES_PER_CARD) {
                         break;
@@ -564,7 +586,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
      */
     private void reconfigureDatabaseIfDirty() {
         synchronized (sessionLock) {
-            if (session == null || !databaseDirty || referenceBitmaps.isEmpty()) {
+            if (session == null || !databaseDirty) {
                 return;
             }
             databaseDirty = false;
@@ -581,7 +603,9 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                     Log.w(TAG, "Not enough features to track printing " + entry.getKey());
                 }
             }
-            if (registered == 0) {
+            // Every image failing feature extraction keeps the working database; a genuinely
+            // empty set must install anyway — that is how a removed card stops being tracked.
+            if (registered == 0 && !referenceBitmaps.isEmpty()) {
                 return;
             }
 
@@ -813,6 +837,17 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                         ? R.string.ar_card_tracking
                         : R.string.ar_card_tap_to_place);
 
+                // A located card can be lifted for manual re-placement; an unlocated one already
+                // re-places via the row tap. Commanders belong to their players, so scanned
+                // table cards are the only removable ones.
+                Button replace = row.findViewById(R.id.ar_row_replace);
+                replace.setVisibility(card.located ? View.VISIBLE : View.GONE);
+                replace.setOnClickListener(v -> rePlaceCard(card));
+
+                Button remove = row.findViewById(R.id.ar_row_remove);
+                remove.setVisibility(owner == null ? View.VISIBLE : View.GONE);
+                remove.setOnClickListener(v -> removeCard(card));
+
                 row.setOnClickListener(v -> onCardRowTapped(card));
                 cardList.addView(row);
             }
@@ -839,6 +874,65 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         } else {
             pendingPlacementKey = card.key;
         }
+        refreshCardList();
+        updateStatusLine();
+    }
+
+    /**
+     * Lifts a card off wherever it sits and arms the surface-tap placement flow. Meant for a
+     * manually placed card that landed on the wrong spot; a card the camera is actively
+     * tracking will snap back the moment tracking re-locks — remove it instead if the
+     * identification itself is wrong.
+     */
+    private void rePlaceCard(ActiveCard card) {
+        synchronized (sessionLock) {
+            if (card.anchor != null) {
+                card.anchor.detach();
+                card.anchor = null;
+            }
+            card.trackedImage = null;
+        }
+        card.located = false;
+        pendingPlacementKey = card.key;
+        cardListOpen = false;
+        refreshCardList();
+        updateStatusLine();
+    }
+
+    /**
+     * Removes a misidentified card everywhere it lives: the card set, the overlay, the
+     * reference-image database, and the scanner's match memory — without that last step the
+     * identifier would replay the match and the card would rejoin within a frame. The name
+     * stays out only until Rescan; a removal is never permanent.
+     */
+    private void removeCard(ActiveCard card) {
+        if (identifier != null) {
+            identifier.dismiss(card.name);
+        }
+        cardsByKey.remove(card.key);
+        cardOrder.remove(card);
+        for (String printingId : card.printingUrls.keySet()) {
+            cardByPrinting.remove(printingId);
+            referenceBitmaps.remove(printingId);
+        }
+        overlay.removeCard(card.key);
+        if (card.key.equals(pendingPlacementKey)) {
+            pendingPlacementKey = null;
+        }
+        if (card.key.equals(focusedKey)) {
+            focusedKey = null;
+            overlay.setFocus(null);
+            panel.setVisibility(View.GONE);
+        }
+        synchronized (sessionLock) {
+            if (card.anchor != null) {
+                card.anchor.detach();
+                card.anchor = null;
+            }
+            card.trackedImage = null;
+            databaseDirty = true;
+        }
+        executor.execute(this::reconfigureDatabaseIfDirty);
         refreshCardList();
         updateStatusLine();
     }
@@ -1063,7 +1157,36 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 Toast.makeText(this, R.string.ar_save_failed, Toast.LENGTH_LONG).show();
             }
         }
+        // A keyword counter may have granted or removed Flying/Reach just now.
+        ActiveCard focused = focusedKey == null ? null : cardsByKey.get(focusedKey);
+        if (focused != null) {
+            updateAbilityFlags(focused);
+        }
         refreshCounterUi();
+    }
+
+    /**
+     * Re-derives the render-affecting abilities from printed keywords plus keyword counters.
+     * UI thread only — the counter store is not GL-safe; the GL thread reads the flags.
+     */
+    private void updateAbilityFlags(ActiveCard card) {
+        CardCounters counters = store.get(card.printingId);
+        card.flying = hasAbility(card, counters, "Flying");
+        card.reach = hasAbility(card, counters, "Reach");
+    }
+
+    private static boolean hasAbility(ActiveCard card, CardCounters counters, String ability) {
+        for (String keyword : card.keywords) {
+            if (keyword.equalsIgnoreCase(ability)) {
+                return true;
+            }
+        }
+        for (String keyword : counters.keywords) {
+            if (keyword.equalsIgnoreCase(ability)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Rebuilds the focused card's tappable chip row and re-stamps its overlay chips. */
@@ -1289,6 +1412,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                     // A different printing of this card: its own counters take over.
                     card.printingId = image.getName();
                     runOnUiThread(() -> {
+                        updateAbilityFlags(card);
                         pushCounterChips(card);
                         if (card.key.equals(focusedKey)) {
                             refreshCounterUi();
@@ -1473,12 +1597,51 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
 
             float halfWidth = card.halfWidthM;
             float halfHeight = card.halfHeightM;
-            // The image lies in the pose's X-Z plane; -Z is the top edge of the artwork.
+            // A Flying card renders lifted along the pose's up axis; everything else at 0.
+            boolean flying = card.flying;
+            float lift = flying ? FLY_HEIGHT_M : 0f;
+            float[] corners = projectCorners(pose, halfWidth, halfHeight, lift);
+            if (corners == null) {
+                return null;
+            }
+            float[] center = projectToScreen(pose.transformPoint(new float[] {0, lift, 0}));
+            if (center == null) {
+                return null;
+            }
+
+            float baseWidth = (float) Math.hypot(corners[2] - corners[0], corners[3] - corners[1]);
+            CardOverlayView.CardPose out = new CardOverlayView.CardPose(
+                    card.key, corners, center[0], center[1], baseWidth);
+            if (flying) {
+                // The ground shadow needs the table-level geometry too. Losing it to a
+                // projection edge case loses only the shadow, never the card itself.
+                float[] ground = projectToScreen(new float[] {pose.tx(), pose.ty(), pose.tz()});
+                float[] shadowCorners = projectCorners(pose, halfWidth, halfHeight, 0f);
+                if (ground != null && shadowCorners != null) {
+                    out.flying = true;
+                    out.shadowCorners = shadowCorners;
+                    out.groundX = ground[0];
+                    out.groundY = ground[1];
+                }
+            } else if (card.reach) {
+                float[] sky = projectToScreen(pose.transformPoint(new float[] {0, FLY_HEIGHT_M, 0}));
+                if (sky != null) {
+                    out.reach = true;
+                    out.skyX = sky[0];
+                    out.skyY = sky[1];
+                }
+            }
+            return out;
+        }
+
+        /** The card's four corners at the given height above its pose, projected to screen.
+         *  The image lies in the pose's X-Z plane; -Z is the top edge of the artwork. */
+        private float[] projectCorners(Pose pose, float halfWidth, float halfHeight, float lift) {
             float[][] localCorners = {
-                    {-halfWidth, 0, -halfHeight},
-                    {halfWidth, 0, -halfHeight},
-                    {halfWidth, 0, halfHeight},
-                    {-halfWidth, 0, halfHeight},
+                    {-halfWidth, lift, -halfHeight},
+                    {halfWidth, lift, -halfHeight},
+                    {halfWidth, lift, halfHeight},
+                    {-halfWidth, lift, halfHeight},
             };
             float[] corners = new float[8];
             for (int i = 0; i < 4; i++) {
@@ -1489,14 +1652,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 corners[i * 2] = screen[0];
                 corners[i * 2 + 1] = screen[1];
             }
-
-            float[] center = projectToScreen(new float[] {pose.tx(), pose.ty(), pose.tz()});
-            if (center == null) {
-                return null;
-            }
-
-            float baseWidth = (float) Math.hypot(corners[2] - corners[0], corners[3] - corners[1]);
-            return new CardOverlayView.CardPose(card.key, corners, center[0], center[1], baseWidth);
+            return corners;
         }
 
         /** World point to screen pixels, or null when it is behind the camera. */

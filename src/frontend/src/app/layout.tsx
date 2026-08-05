@@ -13,9 +13,10 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "MTG Deck Builder",
+  title: "MTG Card Lookup",
   description:
-    "Search Magic: The Gathering cards, browse every printing, and compare vendor prices.",
+    "Search Magic: The Gathering cards, browse every printing, compare vendor prices, and "
+    + "track Commander games.",
 };
 
 export default function RootLayout({

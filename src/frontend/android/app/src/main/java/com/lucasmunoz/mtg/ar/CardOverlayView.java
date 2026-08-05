@@ -4,6 +4,7 @@ import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.DashPathEffect;
 import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.Path;
@@ -44,6 +45,17 @@ public final class CardOverlayView extends View {
         final float centerY;
         /** Projected width of the physical card in pixels, the basis for floating size. */
         final float baseWidthPx;
+
+        /** Table-level corners when the card draws elevated (Flying); null otherwise. */
+        float[] shadowCorners;
+        /** Table-level centre — the foot of the altitude line — when flying. */
+        float groundX;
+        float groundY;
+        /** The flyer-altitude point above the card: the tip of the Reach indicator. */
+        float skyX;
+        float skyY;
+        boolean flying;
+        boolean reach;
 
         CardPose(String key, float[] corners, float centerX, float centerY, float baseWidthPx) {
             this.key = key;
@@ -144,12 +156,19 @@ public final class CardOverlayView extends View {
     private final Paint tokenLifeText = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint tokenSmallText = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint scanBorder = new Paint(Paint.ANTI_ALIAS_FLAG);
+    /** The dark footprint a Flying card casts at table level. */
+    private final Paint shadowFill = new Paint(Paint.ANTI_ALIAS_FLAG);
+    /** Dashed vertical: a flyer's tether to its shadow, or a Reach card's grasp upward. */
+    private final Paint altitudePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Path shadowPath = new Path();
+    private final Path altitudePath = new Path();
 
-    /** Titles the scanner spotted this pass; stale ones stop drawing rather than lingering. */
-    private volatile List<RectF> scanRegions = Collections.emptyList();
-    private volatile long scanRegionsAtMs;
-    /** Just past the OCR cadence (700 ms), so live regions refresh before they expire. */
+    /** Card quads the scanner spotted this pass; stale ones stop drawing, not linger. */
+    private volatile List<float[]> scanQuads = Collections.emptyList();
+    private volatile long scanQuadsAtMs;
+    /** Just past the scan cadence (700 ms), so live outlines refresh before they expire. */
     private static final long SCAN_REGION_TTL_MS = 900;
+    private final Path scanPath = new Path();
     private final Matrix placeMatrix = new Matrix();
     private final RectF tokenRect = new RectF();
     private final Rect tokenSrcRect = new Rect();
@@ -187,6 +206,12 @@ public final class CardOverlayView extends View {
         scanBorder.setStyle(Paint.Style.STROKE);
         scanBorder.setStrokeWidth(dp(2.5f));
         scanBorder.setColor(Color.argb(220, 46, 204, 113));
+        shadowFill.setStyle(Paint.Style.FILL);
+        shadowFill.setColor(Color.argb(80, 0, 0, 0));
+        altitudePaint.setStyle(Paint.Style.STROKE);
+        altitudePaint.setStrokeWidth(dp(2));
+        altitudePaint.setColor(Color.argb(200, 46, 204, 113));
+        altitudePaint.setPathEffect(new DashPathEffect(new float[] {dp(6), dp(5)}, 0));
         touchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
 
         scaleDetector = new ScaleGestureDetector(context,
@@ -239,6 +264,15 @@ public final class CardOverlayView extends View {
         postInvalidate();
     }
 
+    /** Drops a card's visual state entirely; its poses stop arriving once the card is gone. */
+    void removeCard(String key) {
+        renders.remove(key);
+        if (key.equals(focusedKey)) {
+            focusedKey = null;
+        }
+        postInvalidate();
+    }
+
     /**
      * Creates or updates a player's life token. A null art bitmap keeps whatever art the token
      * already has, mirroring {@link #upsertCard}; life, tax and name always update.
@@ -280,10 +314,10 @@ public final class CardOverlayView extends View {
         postInvalidate();
     }
 
-    /** Green outlines over the card titles the scanner can currently read. */
-    void setScanRegions(List<RectF> regions) {
-        scanRegions = regions;
-        scanRegionsAtMs = SystemClock.elapsedRealtime();
+    /** Green outlines around the card-shaped quads the scanner currently sees. */
+    void setScanQuads(List<float[]> quads) {
+        scanQuads = quads;
+        scanQuadsAtMs = SystemClock.elapsedRealtime();
         postInvalidate();
     }
 
@@ -409,9 +443,15 @@ public final class CardOverlayView extends View {
 
     @Override
     protected void onDraw(Canvas canvas) {
-        if (SystemClock.elapsedRealtime() - scanRegionsAtMs <= SCAN_REGION_TTL_MS) {
-            for (RectF region : scanRegions) {
-                canvas.drawRoundRect(region, dp(6), dp(6), scanBorder);
+        if (SystemClock.elapsedRealtime() - scanQuadsAtMs <= SCAN_REGION_TTL_MS) {
+            for (float[] quad : scanQuads) {
+                scanPath.rewind();
+                scanPath.moveTo(quad[0], quad[1]);
+                for (int i = 1; i < 4; i++) {
+                    scanPath.lineTo(quad[i * 2], quad[i * 2 + 1]);
+                }
+                scanPath.close();
+                canvas.drawPath(scanPath, scanBorder);
             }
         }
         for (CardPose pose : poses) {
@@ -419,10 +459,16 @@ public final class CardOverlayView extends View {
             if (state == null || state.bitmap == null) {
                 continue;
             }
+            if (pose.flying) {
+                drawGroundShadow(canvas, pose);
+            }
             if (state.placed) {
                 drawPlaced(canvas, pose, state);
             } else {
                 drawFloating(canvas, pose, state);
+            }
+            if (pose.reach) {
+                drawReachIndicator(canvas, pose);
             }
         }
         drawTokens(canvas);
@@ -521,6 +567,32 @@ public final class CardOverlayView extends View {
             length--;
         }
         return text.substring(0, length) + ellipsis;
+    }
+
+    /** A Flying card's footprint on the table, tethered to the card, so its altitude reads. */
+    private void drawGroundShadow(Canvas canvas, CardPose pose) {
+        float[] corners = pose.shadowCorners;
+        shadowPath.rewind();
+        shadowPath.moveTo(corners[0], corners[1]);
+        for (int i = 1; i < 4; i++) {
+            shadowPath.lineTo(corners[i * 2], corners[i * 2 + 1]);
+        }
+        shadowPath.close();
+        canvas.drawPath(shadowPath, shadowFill);
+
+        altitudePath.rewind();
+        altitudePath.moveTo(pose.groundX, pose.groundY);
+        altitudePath.lineTo(pose.centerX, pose.centerY);
+        canvas.drawPath(altitudePath, altitudePaint);
+    }
+
+    /** A dashed line up into flyer altitude: this card can touch what floats there. */
+    private void drawReachIndicator(Canvas canvas, CardPose pose) {
+        altitudePath.rewind();
+        altitudePath.moveTo(pose.centerX, pose.centerY);
+        altitudePath.lineTo(pose.skyX, pose.skyY);
+        canvas.drawPath(altitudePath, altitudePaint);
+        canvas.drawCircle(pose.skyX, pose.skyY, dp(4), altitudePaint);
     }
 
     private void drawFloating(Canvas canvas, CardPose pose, RenderState state) {
