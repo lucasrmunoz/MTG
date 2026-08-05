@@ -10,6 +10,24 @@ final class ScanGeometry {
     private ScanGeometry() {}
 
     /**
+     * Sensor-pixel box for an ML Kit box reported in the rotated upright frame.
+     *
+     * rotationDegrees is the rotation that makes the sensor image upright — in this app only 0
+     * and 90 occur (landscape camera, portrait-locked activity); anything else is a programming
+     * error, not a case to guess at.
+     */
+    static float[] rotatedBoxToImage(float[] box, int imageHeight, int rotationDegrees) {
+        if (rotationDegrees == 0) {
+            return new float[] {box[0], box[1], box[2], box[3]};
+        }
+        if (rotationDegrees == 90) {
+            // Upright (x', y') came from sensor (x, y) via x' = H - y, y' = x.
+            return new float[] {box[1], imageHeight - box[2], box[3], imageHeight - box[0]};
+        }
+        throw new IllegalArgumentException("Unsupported rotation: " + rotationDegrees);
+    }
+
+    /**
      * View-space corners for a sensor-pixel quad, given where three image corners land on
      * screen: cornerViews = view coords of image (0,0), (width,0) and (0,height), packed as
      * {x00, y00, x10, y10, x01, y01} — exactly what one transformCoordinates2d call yields.

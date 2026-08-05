@@ -1,12 +1,9 @@
 package com.lucasmunoz.mtg.ar;
 
-import android.graphics.Bitmap;
-import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.media.Image;
 import android.os.SystemClock;
 import android.util.Log;
-import com.google.android.gms.tasks.Tasks;
 import com.google.ar.core.Coordinates2d;
 import com.google.ar.core.Frame;
 import com.google.ar.core.exceptions.NotYetAvailableException;
@@ -16,28 +13,23 @@ import com.google.mlkit.vision.text.TextRecognition;
 import com.google.mlkit.vision.text.TextRecognizer;
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 /**
- * Reads Magic cards off camera frames and turns them into confirmed candidates.
+ * Reads card titles off camera frames and turns them into candidate cards.
  *
- * Identification is a three-gate pipeline. Contour detection finds card-shaped quads, so only
- * text sitting on a physical card rectangle is ever considered. Each quad is perspective-warped
- * flat and OCR'd: the title band names the card and the collector band names the exact
- * printing, paired within that one card — never across the frame. Scryfall then confirms the
- * reading, and the quad's artwork is compared against the printing's scan by perceptual hash,
- * so a misread that resolves to a real-but-wrong card fails the artwork gate and never joins.
+ * On-device OCR (ML Kit) pulls text lines out of a frame; lines that could be a title go through
+ * Scryfall's fuzzy lookup, which forgives OCR misreads the way it forgives typos. Every distinct
+ * hit becomes a candidate for the user to tap. This never guesses from card *shape* — a match
+ * only exists once Scryfall confirms a real card name, and tracking still runs on registered
+ * reference scans afterwards. Wrong reads are correctable: a removed card's name stays out
+ * until {@link #rescan} deliberately reopens everything.
  */
 final class CardIdentifier {
 
@@ -48,29 +40,24 @@ final class CardIdentifier {
 
     interface ScanListener {
         /**
-         * Live scanning feedback, called off the main thread. After each detection pass,
-         * cardOutlines holds one view-space 4-corner polygon (8 floats) per card-shaped quad
-         * in frame; when a lookup settles the call carries null outlines (the ones on screen
+         * Live scanning feedback, called off the main thread. After each OCR pass, outlines
+         * holds a view-space 4-corner polygon (8 floats) per plausible card title in frame;
+         * when a Scryfall lookup settles the call carries null outlines (the ones on screen
          * are still current) with the refreshed pending list.
          */
-        void onScanActivity(List<float[]> cardOutlines, List<String> pendingTitles);
+        void onScanActivity(List<float[]> outlines, List<String> pendingTitles);
     }
 
     private static final String TAG = "CardIdentifier";
 
-    /** How often to scan a frame; more brings no benefit at hand-held steadiness. */
+    /** How often to OCR a frame; more brings no benefit at hand-held steadiness. */
     private static final long ATTEMPT_INTERVAL_MS = 700;
-    /** The flattened card OCR and hashing work on; close to the physical 63:88. */
-    private static final int WARP_WIDTH = 384;
-    private static final int WARP_HEIGHT = 536;
-    /** The title lives in the card's top band… */
-    private static final float TITLE_BAND = 0.17f;
-    /** …and the collector line in the bottom one, both as fractions of card height. */
-    private static final float COLLECTOR_BAND = 0.84f;
-    /** How many gradient bits two artworks may disagree on and still be the same picture. */
-    private static final int MATCH_DISTANCE = 22;
-    /** A fuzzy name hit verifies against at most this many art versions before giving up. */
-    private static final int MAX_VERSIONS_TO_VERIFY = 8;
+
+    /**
+     * The camera sensor is landscape while the activity is locked to portrait, so frames reach
+     * ML Kit rotated by 90 degrees.
+     */
+    private static final int ROTATION_DEGREES = 90;
 
     private final TextRecognizer recognizer =
             TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
@@ -92,23 +79,21 @@ final class CardIdentifier {
         }
     }
 
-    /** Readings Scryfall (or the artwork gate) already rejected, so they are not re-queried. */
+    /** Readings Scryfall already rejected, so noise lines are not re-queried every frame. */
     private final Set<String> rejected = new HashSet<>();
     private final Set<String> pending = new HashSet<>();
     /** What each pending lookup is about, human-readable, for the "checking …" status line. */
     private final Map<String, String> pendingDisplay = new LinkedHashMap<>();
     /**
-     * Candidates keyed by card name. A collector-line or artwork-verified hit names the exact
-     * printing on the table and replaces a fuzzy name hit for the same card.
+     * Candidates keyed by card name. A collector-line hit ("SPM 195") names the exact printing
+     * on the table and replaces a fuzzy name hit for the same card, which for a basic land would
+     * otherwise float arbitrary artwork.
      */
     private final Map<String, Match> matchedByName = new LinkedHashMap<>();
 
     /** Names the user removed. Without this, the next lookup replays the match and the card
      *  rejoins within a frame — a removal silences the name until the next {@link #rescan}. */
     private final Set<String> dismissedNames = new HashSet<>();
-
-    /** Artwork hashes by printing id, so each scan downloads at most once. */
-    private final Map<String, Long> printingHashes = new HashMap<>();
 
     CardIdentifier(ExecutorService lookupExecutor, Listener listener, ScanListener scanListener) {
         this.lookupExecutor = lookupExecutor;
@@ -141,125 +126,46 @@ final class CardIdentifier {
                 Coordinates2d.VIEW,
                 cornerViews);
 
-        // Copy the Y plane — the grayscale picture — so the camera image can be closed at
-        // once; detection, warping and OCR then run entirely off the GL thread.
-        Image.Plane yPlane = image.getPlanes()[0];
-        if (yPlane.getPixelStride() != 1) {
-            // The YUV_420_888 spec fixes the Y pixel stride at 1; anything else is a device
-            // quirk this pipeline does not support.
-            Log.e(TAG, "Unsupported Y-plane pixel stride: " + yPlane.getPixelStride());
-            image.close();
-            return;
-        }
-        ByteBuffer buffer = yPlane.getBuffer();
-        byte[] gray = new byte[buffer.remaining()];
-        buffer.get(gray);
-        int rowStride = yPlane.getRowStride();
-        image.close();
-
         lastAttemptMs = now;
         recognizing = true;
-        lookupExecutor.execute(() -> {
-            try {
-                processFrame(gray, rowStride, imageWidth, imageHeight, cornerViews);
-            } finally {
-                recognizing = false;
-            }
-        });
+        InputImage input = InputImage.fromMediaImage(image, ROTATION_DEGREES);
+        recognizer.process(input)
+                .addOnSuccessListener(text ->
+                        handleText(text, imageWidth, imageHeight, cornerViews))
+                .addOnCompleteListener(task -> {
+                    // The Image backs InputImage until processing completes; close it only now.
+                    image.close();
+                    recognizing = false;
+                });
     }
 
-    /** Detects card quads, publishes their outlines, then reads each one. */
-    private void processFrame(
-            byte[] gray, int rowStride, int width, int height, float[] cornerViews) {
-        List<CardQuadDetector.Quad> quads = CardQuadDetector.detect(gray, rowStride, width, height);
-
-        List<float[]> outlines = new ArrayList<>(quads.size());
-        for (CardQuadDetector.Quad quad : quads) {
-            outlines.add(ScanGeometry.imageQuadToView(quad.corners, width, height, cornerViews));
-        }
-        scanListener.onScanActivity(outlines, snapshotPendingTitles());
-
-        for (CardQuadDetector.Quad quad : quads) {
-            readQuad(CardQuadDetector.warp(
-                    gray, rowStride, width, height, quad, WARP_WIDTH, WARP_HEIGHT));
-        }
-    }
-
-    /** OCRs one flattened card and schedules lookups for whatever its bands yield. */
-    private void readQuad(Bitmap warped) {
-        Text text = recognizeSync(warped);
-        if (text == null) {
-            return;
-        }
-        String title = titleFrom(text, warped.getHeight());
-        SetLineHeuristics.SetAndNumber collectorLine = collectorFrom(text, warped.getHeight());
-        if (title == null && collectorLine == null) {
-            // Perhaps the card faces its owner across the table: read it upside down.
-            warped = rotate180(warped);
-            text = recognizeSync(warped);
-            if (text == null) {
-                return;
-            }
-            title = titleFrom(text, warped.getHeight());
-            collectorLine = collectorFrom(text, warped.getHeight());
-        }
-        if (title == null && collectorLine == null) {
-            return;
-        }
-
-        long quadHash = DHash.of(warped);
-        if (collectorLine != null) {
-            schedulePrintingLookup(collectorLine, quadHash);
-        }
-        if (title != null) {
-            scheduleTitleLookup(title, quadHash);
-        }
-    }
-
-    /** ML Kit on the executor thread; blocking here is what keeps the pipeline ordered. */
-    private Text recognizeSync(Bitmap bitmap) {
-        try {
-            return Tasks.await(recognizer.process(InputImage.fromBitmap(bitmap, 0)),
-                    5, TimeUnit.SECONDS);
-        } catch (ExecutionException | TimeoutException e) {
-            Log.w(TAG, "OCR failed on a flattened card.", e);
-            return null;
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return null;
-        }
-    }
-
-    /** The topmost plausible title line within the card's title band, or null. */
-    private static String titleFrom(Text text, int height) {
-        String best = null;
-        int bestTop = Integer.MAX_VALUE;
-        for (Text.TextBlock block : text.getTextBlocks()) {
-            for (Text.Line line : block.getLines()) {
-                Rect box = line.getBoundingBox();
-                if (box == null || box.centerY() > height * TITLE_BAND) {
-                    continue;
-                }
-                String title = TitleHeuristics.clean(line.getText());
-                if (title != null && box.top < bestTop) {
-                    bestTop = box.top;
-                    best = title;
-                }
-            }
-        }
-        return best;
-    }
-
-    /** The collector-line reading from the card's bottom band, or null. */
-    private static SetLineHeuristics.SetAndNumber collectorFrom(Text text, int height) {
+    private void handleText(Text text, int imageWidth, int imageHeight, float[] cornerViews) {
+        List<float[]> outlines = new ArrayList<>();
         List<String> numbers = new ArrayList<>();
         List<String> setCodes = new ArrayList<>();
+
         for (Text.TextBlock block : text.getTextBlocks()) {
-            for (Text.Line line : block.getLines()) {
-                Rect box = line.getBoundingBox();
-                if (box == null || box.centerY() < height * COLLECTOR_BAND) {
-                    continue;
+            if (block.getLines().isEmpty()) {
+                continue;
+            }
+            // A card's title is the first line of its own text block; deeper lines are type
+            // lines and rules text, which fuzzy lookup would happily mis-match.
+            String title = TitleHeuristics.clean(block.getLines().get(0).getText());
+            if (title != null) {
+                Rect box = block.getBoundingBox();
+                if (box != null) {
+                    float[] imageBox = ScanGeometry.rotatedBoxToImage(
+                            new float[] {box.left, box.top, box.right, box.bottom},
+                            imageHeight, ROTATION_DEGREES);
+                    outlines.add(ScanGeometry.imageQuadToView(
+                            boxCorners(imageBox), imageWidth, imageHeight, cornerViews));
                 }
+                scheduleTitleLookup(title);
+            }
+
+            // The collector line at the card's bottom carries the exact printing; its number and
+            // set code often land in separate lines or blocks, so both are collected frame-wide.
+            for (Text.Line line : block.getLines()) {
                 String number = SetLineHeuristics.parseNumber(line.getText());
                 if (number != null && !numbers.contains(number)) {
                     numbers.add(number);
@@ -270,22 +176,26 @@ final class CardIdentifier {
                 }
             }
         }
-        List<SetLineHeuristics.SetAndNumber> pairs = SetLineHeuristics.pair(numbers, setCodes);
-        return pairs.isEmpty() ? null : pairs.get(0);
+
+        for (SetLineHeuristics.SetAndNumber pair : SetLineHeuristics.pair(numbers, setCodes)) {
+            schedulePrintingLookup(pair);
+        }
+
+        scanListener.onScanActivity(outlines, snapshotPendingTitles());
     }
 
-    private static Bitmap rotate180(Bitmap bitmap) {
-        Matrix matrix = new Matrix();
-        matrix.postRotate(180);
-        return Bitmap.createBitmap(
-                bitmap, 0, 0, bitmap.getWidth(), bitmap.getHeight(), matrix, true);
+    /** A box {l, t, r, b} as the 4-corner polygon the overlay draws. */
+    private static float[] boxCorners(float[] box) {
+        return new float[] {
+                box[0], box[1], box[2], box[1], box[2], box[3], box[0], box[3],
+        };
     }
 
     private synchronized List<String> snapshotPendingTitles() {
         return new ArrayList<>(pendingDisplay.values());
     }
 
-    private void scheduleTitleLookup(String title, long quadHash) {
+    private void scheduleTitleLookup(String title) {
         String key = "title:" + title.toLowerCase();
         synchronized (this) {
             if (rejected.contains(key) || !pending.add(key)) {
@@ -293,11 +203,11 @@ final class CardIdentifier {
             }
             pendingDisplay.put(key, title);
         }
-        lookupExecutor.execute(() -> lookUp(key, false, quadHash,
+        lookupExecutor.execute(() -> lookUp(key, false,
                 () -> ScryfallLookup.findByFuzzyName(title)));
     }
 
-    private void schedulePrintingLookup(SetLineHeuristics.SetAndNumber pair, long quadHash) {
+    private void schedulePrintingLookup(SetLineHeuristics.SetAndNumber pair) {
         String key = "printing:" + pair.setCode + "/" + pair.collectorNumber;
         synchronized (this) {
             if (rejected.contains(key) || !pending.add(key)) {
@@ -305,7 +215,7 @@ final class CardIdentifier {
             }
             pendingDisplay.put(key, pair.setCode.toUpperCase() + " " + pair.collectorNumber);
         }
-        lookupExecutor.execute(() -> lookUp(key, true, quadHash,
+        lookupExecutor.execute(() -> lookUp(key, true,
                 () -> ScryfallLookup.bySetAndNumber(pair.setCode, pair.collectorNumber)));
     }
 
@@ -313,24 +223,18 @@ final class CardIdentifier {
         ScryfallLookup.CardSummary run() throws IOException;
     }
 
-    private void lookUp(String key, boolean exact, long quadHash, Lookup lookup) {
+    private void lookUp(String key, boolean exact, Lookup lookup) {
         try {
             ScryfallLookup.CardSummary card = lookup.run();
-            List<ScryfallLookup.CardSummary> snapshot = null;
-            boolean artworkConfirmed = false;
-            if (card != null) {
-                ScryfallLookup.CardSummary verified = verifyArtwork(card, exact, quadHash);
-                artworkConfirmed = verified != null && verified != card;
-                card = verified;
-            }
-            synchronized (this) {
-                pending.remove(key);
-                pendingDisplay.remove(key);
-                if (card == null) {
+            if (card == null) {
+                synchronized (this) {
                     rememberRejection(key);
-                } else {
-                    snapshot = addMatch(card, exact || artworkConfirmed);
                 }
+                return;
+            }
+            List<ScryfallLookup.CardSummary> snapshot;
+            synchronized (this) {
+                snapshot = addMatch(card, exact);
             }
             if (snapshot != null) {
                 listener.onCandidates(snapshot);
@@ -338,69 +242,20 @@ final class CardIdentifier {
         } catch (IOException e) {
             // Network trouble: forget the attempt so a later frame can retry this reading.
             Log.w(TAG, "Scryfall lookup failed for " + key, e);
+        } catch (RuntimeException e) {
+            // A malformed response must not wedge this reading in the pending set forever.
+            Log.w(TAG, "Lookup failed unexpectedly for " + key, e);
+            synchronized (this) {
+                rememberRejection(key);
+            }
+        } finally {
             synchronized (this) {
                 pending.remove(key);
                 pendingDisplay.remove(key);
             }
+            // Settled either way: the status line should stop saying this one is being checked.
+            scanListener.onScanActivity(null, snapshotPendingTitles());
         }
-        // Settled either way: the status line should stop saying this one is being checked.
-        scanListener.onScanActivity(null, snapshotPendingTitles());
-    }
-
-    /**
-     * The artwork gate: compares what the camera saw against the proposed printing's scan.
-     * Returns the printing whose artwork matches — the candidate itself, or for a fuzzy name
-     * hit possibly another art version, which is then the exact physical copy on the table.
-     * Null means nothing matched: an OCR misread that resolved to the wrong card. A failed
-     * download fails open — the quad and Scryfall gates have already passed.
-     */
-    private ScryfallLookup.CardSummary verifyArtwork(
-            ScryfallLookup.CardSummary card, boolean exact, long quadHash) {
-        Integer distance = artworkDistance(card.id, card.imageUrl, quadHash);
-        if (distance == null || distance <= MATCH_DISTANCE) {
-            return card;
-        }
-        if (!exact) {
-            try {
-                int examined = 0;
-                for (ScryfallLookup.CardSummary version : ScryfallLookup.artVersions(card.name)) {
-                    if (++examined > MAX_VERSIONS_TO_VERIFY) {
-                        break;
-                    }
-                    Integer versionDistance =
-                            artworkDistance(version.id, version.imageUrl, quadHash);
-                    if (versionDistance != null && versionDistance <= MATCH_DISTANCE) {
-                        return version;
-                    }
-                }
-            } catch (IOException e) {
-                return card; // Could not list versions: fail open.
-            }
-        }
-        Log.d(TAG, "Artwork gate rejected " + card.name + " at distance " + distance);
-        return null;
-    }
-
-    /** Hash distance to a printing's scan, or null when the scan cannot be fetched. */
-    private Integer artworkDistance(String printingId, String imageUrl, long quadHash) {
-        if (imageUrl == null) {
-            return null;
-        }
-        Long hash;
-        synchronized (printingHashes) {
-            hash = printingHashes.get(printingId);
-        }
-        if (hash == null) {
-            try {
-                hash = DHash.of(ImageFetcher.fetch(imageUrl));
-            } catch (IOException e) {
-                return null;
-            }
-            synchronized (printingHashes) {
-                printingHashes.put(printingId, hash);
-            }
-        }
-        return DHash.distance(hash, quadHash);
     }
 
     /** Forgets a recognised card and refuses that name until the next {@link #rescan}. */

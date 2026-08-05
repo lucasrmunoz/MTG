@@ -27,7 +27,6 @@ import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import com.google.ar.core.Anchor;
-import org.opencv.android.OpenCVLoader;
 import com.google.ar.core.ArCoreApk;
 import com.google.ar.core.AugmentedImage;
 import com.google.ar.core.AugmentedImageDatabase;
@@ -178,6 +177,9 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     private volatile int viewportHeight;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    /** Scanning runs on its own thread: an adopted card queues minutes of image downloads and
+     *  database rebuilds on the main executor, which must never starve the next scan pass. */
+    private final ExecutorService scanExecutor = Executors.newSingleThreadExecutor();
     private CardIdentifier identifier;
     private CounterStore store;
     private KeywordGlossary glossary;
@@ -255,15 +257,9 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
 
         // The scanner always runs, in game mode too: any table card can join the scene with
         // its own counters. Commander names are filtered out of its candidates — those are
-        // already tracked under per-player keys. Quad detection needs OpenCV's native library;
-        // where it fails to load, scanning stays off and the rest of the screen still works.
-        if (OpenCVLoader.initLocal()) {
-            identifier = new CardIdentifier(
-                    executor, this::onCandidatesRecognized, this::onScanActivity);
-        } else {
-            Log.e(TAG, "OpenCV failed to initialise; card scanning is disabled.");
-            Toast.makeText(this, R.string.ar_scan_unavailable, Toast.LENGTH_LONG).show();
-        }
+        // already tracked under per-player keys.
+        identifier = new CardIdentifier(
+                scanExecutor, this::onCandidatesRecognized, this::onScanActivity);
 
         if (game != null) {
             enterGameMode();
@@ -724,6 +720,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             identifier.close();
         }
         executor.shutdown();
+        scanExecutor.shutdown();
         synchronized (sessionLock) {
             if (session != null) {
                 session.close();
