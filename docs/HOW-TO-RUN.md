@@ -1,4 +1,4 @@
-# How to run the MTG Deck Builder
+# How to run MTG Card Lookup
 
 ## Prerequisites
 
