@@ -2,7 +2,14 @@
 
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
-import { commanderTax, type Player } from "@/lib/game";
+import {
+  commanderTax,
+  reminderLabel,
+  REMINDER_PHASES,
+  type Player,
+  type Reminder,
+  type ReminderPhase,
+} from "@/lib/game";
 
 /** Clockwise degrees a zone's content turns so it reads upright from its player's seat. */
 export type SeatRotation = 0 | 90 | 180 | 270;
@@ -12,11 +19,20 @@ interface PlayerZoneProps {
   /** CSS grid-area this zone occupies on the board. */
   area: string;
   rotate: SeatRotation;
+  /** True when it is this player's turn: highlighted border and the End turn button. */
+  isActive: boolean;
+  /** Reminders anchored to this player's turn, due or not. */
+  reminders: Reminder[];
   onAdjustLife: (delta: number) => void;
   onAdjustCasts: (delta: number) => void;
   onRename: (name: string) => void;
   /** Opens the commander picker for this player. */
   onPickCommander: () => void;
+  onEndTurn: () => void;
+  /** Moves the turn marker here — a correction, not a turn taken. */
+  onSetActive: () => void;
+  onAddReminder: (phase: ReminderPhase, text: string) => void;
+  onDismissReminder: (reminderId: number) => void;
 }
 
 /** Held life buttons start repeating after this pause… */
@@ -35,10 +51,16 @@ export function PlayerZone({
   player,
   area,
   rotate,
+  isActive,
+  reminders,
   onAdjustLife,
   onAdjustCasts,
   onRename,
   onPickCommander,
+  onEndTurn,
+  onSetActive,
+  onAddReminder,
+  onDismissReminder,
 }: PlayerZoneProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [recent, setRecent] = useState(0);
@@ -94,14 +116,21 @@ export function PlayerZone({
         {menuOpen ? (
           <ZoneMenu
             player={player}
+            isActive={isActive}
+            reminders={reminders}
             onAdjustCasts={onAdjustCasts}
             onRename={onRename}
             onPickCommander={onPickCommander}
+            onSetActive={onSetActive}
+            onAddReminder={onAddReminder}
+            onDismissReminder={onDismissReminder}
             onClose={() => setMenuOpen(false)}
           />
         ) : (
           <div
-            className="relative h-full w-full overflow-hidden rounded-xl border border-purple/30 bg-surface select-none"
+            className={`relative h-full w-full overflow-hidden rounded-xl border bg-surface select-none ${
+              isActive ? "border-orange" : "border-purple/30"
+            }`}
             onContextMenu={(event) => event.preventDefault()}
           >
             {player.commander?.artCropUrl != null && (
@@ -164,6 +193,42 @@ export function PlayerZone({
                 )}
               </button>
             </div>
+
+            <div className="pointer-events-none absolute inset-x-0 bottom-1.5 z-20 flex flex-col items-center gap-1">
+              {reminders.length > 0 && (
+                <div className="flex max-w-[95%] flex-wrap justify-center gap-1">
+                  {reminders.map((reminder) =>
+                    reminder.due ? (
+                      <button
+                        key={reminder.id}
+                        type="button"
+                        onClick={() => onDismissReminder(reminder.id)}
+                        title="Tap when done"
+                        className="pointer-events-auto max-w-full truncate rounded-full bg-orange px-2 py-0.5 text-xs font-semibold text-background cursor-pointer"
+                      >
+                        {reminderLabel(reminder)}
+                      </button>
+                    ) : (
+                      <span
+                        key={reminder.id}
+                        className="max-w-full truncate rounded-full border border-purple/40 bg-background/80 px-2 py-0.5 text-xs text-foreground/70"
+                      >
+                        {reminderLabel(reminder)}
+                      </span>
+                    ),
+                  )}
+                </div>
+              )}
+              {isActive && (
+                <button
+                  type="button"
+                  onClick={onEndTurn}
+                  className="pointer-events-auto rounded-full border border-orange/60 bg-background/80 px-3 py-1 text-sm font-semibold text-orange hover:bg-orange hover:text-background transition-colors cursor-pointer"
+                >
+                  End turn
+                </button>
+              )}
+            </div>
           </div>
         )}
       </RotatedContent>
@@ -214,18 +279,28 @@ function RotatedContent({
   );
 }
 
-/** The zone flipped to its settings: rename, commander, and the tax stepper. */
+/** The zone flipped to its settings: rename, commander, the tax stepper, turn, and reminders. */
 function ZoneMenu({
   player,
+  isActive,
+  reminders,
   onAdjustCasts,
   onRename,
   onPickCommander,
+  onSetActive,
+  onAddReminder,
+  onDismissReminder,
   onClose,
 }: {
   player: Player;
+  isActive: boolean;
+  reminders: Reminder[];
   onAdjustCasts: (delta: number) => void;
   onRename: (name: string) => void;
   onPickCommander: () => void;
+  onSetActive: () => void;
+  onAddReminder: (phase: ReminderPhase, text: string) => void;
+  onDismissReminder: (reminderId: number) => void;
   onClose: () => void;
 }) {
   useEffect(() => {
@@ -294,6 +369,107 @@ function ZoneMenu({
             +
           </button>
         </span>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        {isActive ? (
+          <span className="text-orange font-semibold">Taking their turn</span>
+        ) : (
+          <button
+            type="button"
+            onClick={onSetActive}
+            className="rounded border border-purple/40 bg-surface px-2 py-1 text-foreground hover:border-purple transition-colors cursor-pointer"
+          >
+            It&apos;s their turn
+          </button>
+        )}
+      </div>
+
+      <ReminderEditor
+        reminders={reminders}
+        onAddReminder={onAddReminder}
+        onDismissReminder={onDismissReminder}
+      />
+    </div>
+  );
+}
+
+/**
+ * The reminders anchored to this player's turn: each removable, plus the form that arms a new
+ * one — "on their next turn, at this phase, do this".
+ */
+function ReminderEditor({
+  reminders,
+  onAddReminder,
+  onDismissReminder,
+}: {
+  reminders: Reminder[];
+  onAddReminder: (phase: ReminderPhase, text: string) => void;
+  onDismissReminder: (reminderId: number) => void;
+}) {
+  const [phase, setPhase] = useState<ReminderPhase>("upkeep");
+  const [text, setText] = useState("");
+
+  function add() {
+    onAddReminder(phase, text);
+    setText("");
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5 text-sm">
+      <span className="text-purple-light">Next turn</span>
+      {reminders.map((reminder) => (
+        <div key={reminder.id} className="flex items-center gap-2">
+          <span
+            className={`min-w-0 flex-1 truncate ${
+              reminder.due ? "font-semibold text-orange" : "text-foreground/80"
+            }`}
+          >
+            {reminderLabel(reminder)}
+          </span>
+          <button
+            type="button"
+            onClick={() => onDismissReminder(reminder.id)}
+            aria-label={`Remove reminder: ${reminderLabel(reminder)}`}
+            className="rounded border border-purple/40 bg-surface px-2 py-0.5 text-foreground hover:border-purple transition-colors cursor-pointer"
+          >
+            ✕
+          </button>
+        </div>
+      ))}
+      <div className="flex items-center gap-1.5">
+        <select
+          value={phase}
+          onChange={(event) => setPhase(event.target.value as ReminderPhase)}
+          aria-label="Reminder phase"
+          className="rounded border border-purple/40 bg-surface px-1.5 py-1 text-foreground focus:outline-none focus:border-purple transition-colors"
+        >
+          {REMINDER_PHASES.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+        <input
+          type="text"
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              add();
+            }
+          }}
+          placeholder="Do what?"
+          aria-label="Reminder text"
+          className="min-w-0 flex-1 rounded border border-purple/40 bg-surface px-2 py-1 text-foreground focus:outline-none focus:border-purple transition-colors"
+        />
+        <button
+          type="button"
+          onClick={add}
+          className="rounded border border-orange/40 bg-surface px-2 py-1 text-orange hover:border-orange transition-colors cursor-pointer"
+        >
+          Add
+        </button>
       </div>
     </div>
   );

@@ -1,5 +1,9 @@
 package com.lucasmunoz.mtg.ar;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -15,6 +19,10 @@ public final class GamePlayer {
     /** Unclamped: cards like Angel's Grace make negative totals a real game state. */
     public int life;
     public int commanderCasts;
+    /** True when it is this player's turn. Display-only: AR shows it but cannot change it. */
+    public final boolean active;
+    /** Preformatted reminder labels for this player's badge; due ones arrive marked ❗. */
+    public final List<String> reminders;
 
     /** The chosen commander printing, or all-null when the player has none to track. */
     public final String cardId;
@@ -24,11 +32,14 @@ public final class GamePlayer {
     public final String cardArtCropUrl;
 
     GamePlayer(int id, String name, int life, int commanderCasts,
+            boolean active, List<String> reminders,
             String cardId, String cardName, String cardImageUrl, String cardArtCropUrl) {
         this.id = id;
         this.name = name;
         this.life = life;
         this.commanderCasts = Math.max(0, commanderCasts);
+        this.active = active;
+        this.reminders = Collections.unmodifiableList(reminders);
         this.cardId = cardId;
         this.cardName = cardName;
         this.cardImageUrl = cardImageUrl;
@@ -63,14 +74,24 @@ public final class GamePlayer {
         String name = json.getString("name");
         int life = json.getInt("life");
         int casts = json.getInt("commanderCasts");
+        // Optional so a payload from before turn tracking still parses; both are display-only.
+        boolean active = json.optBoolean("active", false);
+        List<String> reminders = new ArrayList<>();
+        JSONArray reminderArray = json.optJSONArray("reminders");
+        if (reminderArray != null) {
+            for (int i = 0; i < reminderArray.length(); i++) {
+                reminders.add(reminderArray.getString(i));
+            }
+        }
 
         JSONObject card = json.isNull("card") ? null : json.optJSONObject("card");
         if (card == null) {
-            return new GamePlayer(id, name, life, casts, null, null, null, null);
+            return new GamePlayer(id, name, life, casts, active, reminders,
+                    null, null, null, null);
         }
         // artCropUrl is optional and nullable — older payloads simply have no token art.
         String artCropUrl = card.isNull("artCropUrl") ? null : card.getString("artCropUrl");
-        return new GamePlayer(id, name, life, casts,
+        return new GamePlayer(id, name, life, casts, active, reminders,
                 card.getString("id"), card.getString("name"), card.getString("imageUrl"),
                 artCropUrl);
     }
@@ -81,6 +102,8 @@ public final class GamePlayer {
         json.put("name", name);
         json.put("life", life);
         json.put("commanderCasts", commanderCasts);
+        json.put("active", active);
+        json.put("reminders", new JSONArray(reminders));
         if (cardId == null) {
             json.put("card", JSONObject.NULL);
         } else {

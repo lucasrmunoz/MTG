@@ -1,6 +1,7 @@
 /**
  * Commander game state: one device on the table tracking every player's life total, chosen
- * commander, and command-zone casts (tax is two generic mana per previous cast).
+ * commander, command-zone casts (tax is two generic mana per previous cast), whose turn it is,
+ * and delayed-trigger reminders ("at the beginning of Alice's next draw step, do X").
  *
  * Pure data and helpers only — no React, no storage, no Capacitor. The /game route owns the
  * single mutable copy and persists it through {@link serializeGame}/{@link parseGame}; the AR
@@ -37,10 +38,35 @@ export interface Player {
  */
 export type GameLayout = "grid" | "table";
 
+/** The turn moments a reminder can anchor to; coarse on purpose — no full phase stepper. */
+export const REMINDER_PHASES = ["upkeep", "draw", "combat", "end step"] as const;
+export type ReminderPhase = (typeof REMINDER_PHASES)[number];
+
+/**
+ * A delayed trigger noted at the table: fires on a specific player's next turn — theirs or an
+ * opponent's — labelled with the phase it belongs to. "Due" flips when that turn arrives and
+ * stays set until the reminder is dismissed as done.
+ */
+export interface Reminder {
+  id: number;
+  /** Whose turn the reminder fires on; any seat, not just the creator's. */
+  playerId: number;
+  phase: ReminderPhase;
+  text: string;
+  due: boolean;
+}
+
 export interface GameState {
   startingLife: number;
   layout: GameLayout;
   players: Player[];
+  /** Seat whose turn it is. Defaults to seat 1; correctable from any zone's menu. */
+  activePlayerId: number;
+  /** Total turns taken, 1-based — every player's turn counts, as in multiplayer parlance. */
+  turn: number;
+  reminders: Reminder[];
+  /** Next reminder id to hand out; ids stay unique across dismissals. */
+  nextReminderId: number;
 }
 
 export const MIN_PLAYERS = 2;
@@ -63,7 +89,91 @@ export function createGame(
       commander: null,
       commanderCasts: 0,
     })),
+    activePlayerId: 1,
+    turn: 1,
+    reminders: [],
+    nextReminderId: 1,
   };
+}
+
+/**
+ * Ends the active player's turn: the next seat becomes active and the turn counter advances.
+ * Two kinds of reminders come due at this boundary: everything anchored to the incoming
+ * player's turn (it is now that turn), and the outgoing player's end-step reminders (their end
+ * step just happened — this is how "your next end step" created mid-turn fires this turn).
+ */
+export function endTurn(game: GameState): GameState {
+  const index = game.players.findIndex((player) => player.id === game.activePlayerId);
+  // An unknown active id lands at index -1, so (-1 + 1) % n safely restarts at seat order.
+  const next = game.players[(index + 1) % game.players.length];
+  if (next === undefined) {
+    return game;
+  }
+  return {
+    ...game,
+    activePlayerId: next.id,
+    turn: game.turn + 1,
+    reminders: game.reminders.map((reminder) =>
+      reminder.playerId === next.id ||
+      (reminder.playerId === game.activePlayerId && reminder.phase === "end step")
+        ? { ...reminder, due: true }
+        : reminder,
+    ),
+  };
+}
+
+/**
+ * Manually moves the turn marker — a correction, so the turn counter stays put. The chosen
+ * player's reminders still come due: it is their turn now, however we got here.
+ */
+export function setActivePlayer(game: GameState, playerId: number): GameState {
+  if (!game.players.some((player) => player.id === playerId)) {
+    return game;
+  }
+  return {
+    ...game,
+    activePlayerId: playerId,
+    reminders: game.reminders.map((reminder) =>
+      reminder.playerId === playerId ? { ...reminder, due: true } : reminder,
+    ),
+  };
+}
+
+export function addReminder(
+  game: GameState,
+  playerId: number,
+  phase: ReminderPhase,
+  text: string,
+): GameState {
+  return {
+    ...game,
+    reminders: [
+      ...game.reminders,
+      { id: game.nextReminderId, playerId, phase, text: text.trim(), due: false },
+    ],
+    nextReminderId: game.nextReminderId + 1,
+  };
+}
+
+/** Dismissing means "done" — the reminder is gone, not archived. */
+export function dismissReminder(game: GameState, reminderId: number): GameState {
+  return {
+    ...game,
+    reminders: game.reminders.filter((reminder) => reminder.id !== reminderId),
+  };
+}
+
+const PHASE_LABELS: Record<ReminderPhase, string> = {
+  upkeep: "Upkeep",
+  draw: "Draw",
+  combat: "Combat",
+  "end step": "End step",
+};
+
+/** "End step: exile the token", or just "End step" when no note was typed. */
+export function reminderLabel(reminder: Reminder): string {
+  const phase = PHASE_LABELS[reminder.phase];
+  return reminder.text === "" ? phase : `${phase}: ${reminder.text}`;
 }
 
 /** Two generic mana per cast already made from the command zone. */
@@ -201,7 +311,10 @@ function clampPlayerCount(count: number): number {
  * Storage envelope. Versioned so a future shape change can migrate or discard old saves instead
  * of crashing on them.
  */
-const STORAGE_VERSION = 1;
+const STORAGE_VERSION = 2;
+
+/** Version 1 predates turn tracking; its saves load with the turn fields defaulted. */
+const LEGACY_STORAGE_VERSION = 1;
 
 export function serializeGame(game: GameState): string {
   return JSON.stringify({ version: STORAGE_VERSION, game });
@@ -215,7 +328,11 @@ export function parseGame(raw: string): GameState | null {
   } catch {
     return null;
   }
-  if (!isRecord(envelope) || envelope.version !== STORAGE_VERSION || !isRecord(envelope.game)) {
+  if (
+    !isRecord(envelope) ||
+    (envelope.version !== STORAGE_VERSION && envelope.version !== LEGACY_STORAGE_VERSION) ||
+    !isRecord(envelope.game)
+  ) {
     return null;
   }
 
@@ -238,7 +355,74 @@ export function parseGame(raw: string): GameState | null {
     }
     parsedPlayers.push(player);
   }
-  return { startingLife, layout, players: parsedPlayers };
+
+  const turnState = parseTurnState(envelope.game, parsedPlayers);
+  if (turnState === null) {
+    return null;
+  }
+  return { startingLife, layout, players: parsedPlayers, ...turnState };
+}
+
+type TurnState = Pick<GameState, "activePlayerId" | "turn" | "reminders" | "nextReminderId">;
+
+/**
+ * The turn fields, defaulted when absent so a version-1 save keeps its game. An active id no
+ * seat owns falls back to the first seat instead of failing the whole save.
+ */
+function parseTurnState(game: Record<string, unknown>, players: Player[]): TurnState | null {
+  const { activePlayerId, turn, reminders, nextReminderId } = game;
+  const fallbackActive = players[0]?.id ?? 1;
+
+  const parsedReminders: Reminder[] = [];
+  if (reminders !== undefined) {
+    if (!Array.isArray(reminders)) {
+      return null;
+    }
+    for (const entry of reminders) {
+      const reminder = parseReminder(entry);
+      if (reminder === null) {
+        return null;
+      }
+      parsedReminders.push(reminder);
+    }
+  }
+
+  if (
+    (activePlayerId !== undefined && typeof activePlayerId !== "number") ||
+    (turn !== undefined && typeof turn !== "number") ||
+    (nextReminderId !== undefined && typeof nextReminderId !== "number")
+  ) {
+    return null;
+  }
+
+  const active =
+    typeof activePlayerId === "number" && players.some((player) => player.id === activePlayerId)
+      ? activePlayerId
+      : fallbackActive;
+  const highestId = parsedReminders.reduce((max, reminder) => Math.max(max, reminder.id), 0);
+  return {
+    activePlayerId: active,
+    turn: typeof turn === "number" ? Math.max(1, Math.trunc(turn)) : 1,
+    reminders: parsedReminders,
+    nextReminderId: Math.max(typeof nextReminderId === "number" ? nextReminderId : 1, highestId + 1),
+  };
+}
+
+function parseReminder(entry: unknown): Reminder | null {
+  if (!isRecord(entry)) {
+    return null;
+  }
+  const { id, playerId, phase, text, due } = entry;
+  if (
+    typeof id !== "number" ||
+    typeof playerId !== "number" ||
+    typeof text !== "string" ||
+    typeof due !== "boolean" ||
+    !REMINDER_PHASES.includes(phase as ReminderPhase)
+  ) {
+    return null;
+  }
+  return { id, playerId, phase: phase as ReminderPhase, text, due };
 }
 
 function parsePlayer(entry: unknown): Player | null {
@@ -291,13 +475,21 @@ function isNullableString(value: unknown): value is string | null | undefined {
   return value === null || value === undefined || typeof value === "string";
 }
 
-/** The snapshot the AR screen works from. Players without a recognisable scan send card: null. */
+/**
+ * The snapshot the AR screen works from. Players without a recognisable scan send card: null.
+ * Turn and reminder info rides along as display data — the AR screen shows it but cannot
+ * change it, so none of it is read back by {@link applyArPlayers}.
+ */
 export function toArPlayers(game: GameState): ArGamePlayer[] {
   return game.players.map((player) => ({
     id: player.id,
     name: player.name,
     life: player.life,
     commanderCasts: player.commanderCasts,
+    active: player.id === game.activePlayerId,
+    reminders: game.reminders
+      .filter((reminder) => reminder.playerId === player.id)
+      .map((reminder) => (reminder.due ? `❗ ${reminderLabel(reminder)}` : reminderLabel(reminder))),
     card:
       player.commander !== null && player.commander.imageUrl !== null
         ? {

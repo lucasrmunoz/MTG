@@ -1,7 +1,7 @@
 "use client";
 
 import { PlayerZone } from "@/components/PlayerZone";
-import { boardPlan, type GameState } from "@/lib/game";
+import { boardPlan, type GameState, type ReminderPhase } from "@/lib/game";
 
 interface GameBoardProps {
   game: GameState;
@@ -9,6 +9,10 @@ interface GameBoardProps {
   onAdjustCasts: (playerId: number, delta: number) => void;
   onRename: (playerId: number, name: string) => void;
   onPickCommander: (playerId: number) => void;
+  onEndTurn: () => void;
+  onSetActive: (playerId: number) => void;
+  onAddReminder: (playerId: number, phase: ReminderPhase, text: string) => void;
+  onDismissReminder: (reminderId: number) => void;
 }
 
 /**
@@ -22,6 +26,10 @@ export function GameBoard({
   onAdjustCasts,
   onRename,
   onPickCommander,
+  onEndTurn,
+  onSetActive,
+  onAddReminder,
+  onDismissReminder,
 }: GameBoardProps) {
   const plan = boardPlan(game.layout, game.players.length);
 
@@ -45,10 +53,16 @@ export function GameBoard({
             player={player}
             area={seat.area}
             rotate={seat.rotate}
+            isActive={player.id === game.activePlayerId}
+            reminders={game.reminders.filter((reminder) => reminder.playerId === player.id)}
             onAdjustLife={(delta) => onAdjustLife(player.id, delta)}
             onAdjustCasts={(delta) => onAdjustCasts(player.id, delta)}
             onRename={(name) => onRename(player.id, name)}
             onPickCommander={() => onPickCommander(player.id)}
+            onEndTurn={onEndTurn}
+            onSetActive={() => onSetActive(player.id)}
+            onAddReminder={(phase, text) => onAddReminder(player.id, phase, text)}
+            onDismissReminder={onDismissReminder}
           />
         );
       })}

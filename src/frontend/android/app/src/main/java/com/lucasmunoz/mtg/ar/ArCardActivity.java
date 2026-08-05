@@ -516,7 +516,8 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 Bitmap finalArt = art;
                 // Life and tax are read on the UI thread, where all their mutations happen.
                 runOnUiThread(() -> overlay.upsertToken(
-                        player.id, player.name, finalArt, player.life, player.commanderTax()));
+                        player.id, tokenName(player), finalArt, player.life,
+                        player.commanderTax()));
             }
         });
     }
@@ -1141,21 +1142,39 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         }
         lifeLabel.setText(getString(R.string.ar_life_chip, player.life));
         taxLabel.setText(getString(R.string.ar_tax_chip, player.commanderTax()));
-        overlay.upsertToken(player.id, player.name, null, player.life, player.commanderTax());
+        overlay.upsertToken(player.id, tokenName(player), null, player.life,
+                player.commanderTax());
+        // Reminders are read-only here — tapping one just shows it in full, uncut.
+        for (String reminder : player.reminders) {
+            addChip(reminder, () -> new AlertDialog.Builder(this)
+                    .setTitle(player.name)
+                    .setMessage(reminder)
+                    .setPositiveButton(android.R.string.ok, null)
+                    .show());
+        }
         ActiveCard card = focusedKey == null ? null : cardsByKey.get(focusedKey);
         if (card != null && playersByCardKey.get(card.key) == player) {
             pushGameChips(card, player);
         }
     }
 
-    /** The badge over a commander: owner's name highlighted, then life, then tax when owed. */
+    /**
+     * The badge over a commander: owner's name (turn-marked when active), then life, tax when
+     * owed, and any reminders anchored to this player's turn.
+     */
     private void pushGameChips(ActiveCard card, GamePlayer player) {
         List<String> labels = new ArrayList<>();
         labels.add(getString(R.string.ar_life_chip, player.life));
         if (player.commanderCasts > 0) {
             labels.add(getString(R.string.ar_tax_chip, player.commanderTax()));
         }
-        overlay.setChips(card.key, labels, player.name);
+        labels.addAll(player.reminders);
+        overlay.setChips(card.key, labels, tokenName(player));
+    }
+
+    /** The player's name with a turn marker when it is their turn. */
+    private static String tokenName(GamePlayer player) {
+        return player.active ? "▶ " + player.name : player.name;
     }
 
     /** Sends one card's counter chips to the overlay, where they render above the card. */

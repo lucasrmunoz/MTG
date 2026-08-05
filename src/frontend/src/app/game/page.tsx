@@ -7,10 +7,14 @@ import { GameBoard } from "@/components/GameBoard";
 import { GameSetup } from "@/components/GameSetup";
 import { cardAr } from "@/lib/ar";
 import {
+  addReminder,
   adjustCommanderCasts,
   adjustLife,
   applyArPlayers,
   createGame,
+  dismissReminder,
+  endTurn,
+  setActivePlayer,
   setCommander,
   setLayout,
   setPlayerName,
@@ -19,6 +23,7 @@ import {
   toArPlayers,
   type GameLayout,
   type GameState,
+  type ReminderPhase,
 } from "@/lib/game";
 
 /** The one saved game. Versioned inside the payload, not the key. */
@@ -80,6 +85,23 @@ export default function GamePage() {
   }, []);
   const handleRename = useCallback((playerId: number, name: string) => {
     setGame((current) => (current === null ? current : setPlayerName(current, playerId, name)));
+  }, []);
+  const handleEndTurn = useCallback(() => {
+    setGame((current) => (current === null ? current : endTurn(current)));
+  }, []);
+  const handleSetActive = useCallback((playerId: number) => {
+    setGame((current) => (current === null ? current : setActivePlayer(current, playerId)));
+  }, []);
+  const handleAddReminder = useCallback(
+    (playerId: number, phase: ReminderPhase, text: string) => {
+      setGame((current) =>
+        current === null ? current : addReminder(current, playerId, phase, text),
+      );
+    },
+    [],
+  );
+  const handleDismissReminder = useCallback((reminderId: number) => {
+    setGame((current) => (current === null ? current : dismissReminder(current, reminderId)));
   }, []);
 
   function handleNewGame() {
@@ -158,6 +180,9 @@ export default function GamePage() {
           ←
         </Link>
         <LayoutToggle layout={game.layout} onChange={(next) => setGame(setLayout(game, next))} />
+        <span className="whitespace-nowrap text-sm font-semibold text-purple-light">
+          Turn {game.turn}
+        </span>
         <span className="min-w-0 flex-1" />
         {cardAr !== null && hasTrackableCommander && (
           <button
@@ -195,6 +220,10 @@ export default function GamePage() {
           onAdjustCasts={handleAdjustCasts}
           onRename={handleRename}
           onPickCommander={setPickerFor}
+          onEndTurn={handleEndTurn}
+          onSetActive={handleSetActive}
+          onAddReminder={handleAddReminder}
+          onDismissReminder={handleDismissReminder}
         />
       </div>
 

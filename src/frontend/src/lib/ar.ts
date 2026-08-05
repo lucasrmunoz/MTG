@@ -49,6 +49,10 @@ export interface ArGamePlayer {
   life: number;
   /** Tax is always derived as 2 × casts — only the cast count crosses the bridge. */
   commanderCasts: number;
+  /** True when it is this player's turn. Display-only in AR; never merged back. */
+  active: boolean;
+  /** Reminder labels for this player's badge, due ones marked ❗. Display-only in AR. */
+  reminders: string[];
   /** Null when the player has no commander or the printing has no scan; shown but untracked. */
   card: ArGameCard | null;
 }
