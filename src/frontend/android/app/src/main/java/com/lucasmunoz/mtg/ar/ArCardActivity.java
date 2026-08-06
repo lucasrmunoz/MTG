@@ -3,6 +3,7 @@ package com.lucasmunoz.mtg.ar;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.opengl.GLES20;
@@ -45,6 +46,7 @@ import com.google.ar.core.exceptions.ImageInsufficientQualityException;
 import com.google.ar.core.exceptions.UnavailableException;
 import com.google.ar.core.exceptions.UnavailableUserDeclinedInstallationException;
 import com.lucasmunoz.mtg.R;
+import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -181,6 +183,8 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
      *  database rebuilds on the main executor, which must never starve the next scan pass. */
     private final ExecutorService scanExecutor = Executors.newSingleThreadExecutor();
     private CardIdentifier identifier;
+    /** Non-null only in debuggable builds: the phase-0 scan-corpus capture affordance. */
+    private FrameCorpusRecorder frameRecorder;
     private CounterStore store;
     private KeywordGlossary glossary;
     private boolean saveFailureReported;
@@ -261,6 +265,10 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         identifier = new CardIdentifier(
                 scanExecutor, this::onCandidatesRecognized, this::onScanActivity);
 
+        if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            wireCorpusCapture();
+        }
+
         if (game != null) {
             enterGameMode();
         } else {
@@ -329,6 +337,50 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             }
         }
         adoptCard(card, false);
+    }
+
+    /**
+     * The phase-0 corpus capture toggle (docs/proposals/full-card-scanning.md), debug builds
+     * only: while recording, the GL thread hands Y-plane frames to the recorder, which files
+     * them under the app's external files so they can be pulled to the desktop replay harness.
+     */
+    private void wireCorpusCapture() {
+        File external = getExternalFilesDir("scan-corpus");
+        File corpusDir = external != null ? external : new File(getFilesDir(), "scan-corpus");
+        Button capture = findViewById(R.id.ar_capture);
+        frameRecorder = new FrameCorpusRecorder(corpusDir, new FrameCorpusRecorder.Listener() {
+            @Override
+            public void onFrameSaved(int savedCount) {
+                runOnUiThread(() -> {
+                    if (frameRecorder.isRecording()) {
+                        capture.setText(getString(R.string.ar_capture_recording, savedCount));
+                    }
+                });
+            }
+
+            @Override
+            public void onSaveFailed(Exception e) {
+                runOnUiThread(() -> {
+                    capture.setText(R.string.ar_capture);
+                    Toast.makeText(ArCardActivity.this,
+                            R.string.ar_capture_failed, Toast.LENGTH_LONG).show();
+                });
+            }
+        });
+        capture.setVisibility(View.VISIBLE);
+        capture.setOnClickListener(v -> {
+            boolean start = !frameRecorder.isRecording();
+            frameRecorder.setRecording(start);
+            if (start) {
+                capture.setText(getString(
+                        R.string.ar_capture_recording, frameRecorder.savedCount()));
+            } else {
+                capture.setText(R.string.ar_capture);
+                Toast.makeText(this, getString(R.string.ar_capture_saved_toast,
+                        frameRecorder.savedCount(), frameRecorder.directory()),
+                        Toast.LENGTH_LONG).show();
+            }
+        });
     }
 
     /**
@@ -718,6 +770,9 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         super.onDestroy();
         if (identifier != null) {
             identifier.close();
+        }
+        if (frameRecorder != null) {
+            frameRecorder.close();
         }
         executor.shutdown();
         scanExecutor.shutdown();
@@ -1369,6 +1424,9 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 Camera camera = frame.getCamera();
                 if (identifier != null) {
                     identifier.maybeIdentify(frame);
+                }
+                if (frameRecorder != null) {
+                    frameRecorder.maybeCapture(frame);
                 }
                 updateTrackedImages(frame);
                 handlePendingTap(frame);

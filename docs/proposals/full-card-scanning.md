@@ -1,6 +1,9 @@
 # Full-card scanning with artwork identification
 
-**Status: proposed** — attempted 2026-08-05 (commit `9aaf5b1`) and reverted the same day. This
+**Status: phase 0 tooling in place** — the in-app corpus recorder (debug builds, the ⏺ Corpus
+toggle in the AR screen) and the desktop replay harness (`tools/scan-harness/ReplayHarness.java`)
+exist; the ≥50-frame table corpus is still to be captured. The full pipeline was attempted
+2026-08-05 (commit `9aaf5b1`) and reverted the same day. This
 is ONE proposal, not several: banded OCR needs a detected quad to warp, artwork ranking needs
 the warped image to hash, and the overlay-stability fallback needs per-frame quads. Build it
 in phase order or not at all.

@@ -37,6 +37,10 @@
     <string name="ar_row_replace">Re-place</string>
     <string name="ar_row_remove">✕</string>
     <string name="ar_rescan">Rescan</string>
+    <string name="ar_capture">⏺ Corpus</string>
+    <string name="ar_capture_recording">⏹ %1$d</string>
+    <string name="ar_capture_saved_toast">Saved %1$d corpus frames to %2$s</string>
+    <string name="ar_capture_failed">Frame save failed — capture stopped.</string>
     <string name="ar_rescan_toast">Retrying everything in view.</string>
     <string name="ar_token_place_failed">No surface found there — the token went back to its tray.</string>
     <string name="ar_no_definition">This mechanic isn\'t in the glossary yet.</string>

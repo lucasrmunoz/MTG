@@ -55,9 +55,9 @@ final class CardIdentifier {
 
     /**
      * The camera sensor is landscape while the activity is locked to portrait, so frames reach
-     * ML Kit rotated by 90 degrees.
+     * ML Kit rotated by 90 degrees. The corpus recorder stamps the same value into saved frames.
      */
-    private static final int ROTATION_DEGREES = 90;
+    static final int ROTATION_DEGREES = 90;
 
     private final TextRecognizer recognizer =
             TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);

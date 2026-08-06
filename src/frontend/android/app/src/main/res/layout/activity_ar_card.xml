@@ -63,6 +63,16 @@
                 android:layout_height="0dp"
                 android:layout_weight="1" />
 
+            <!-- Debug builds only: toggles saving Y-plane frames for the scan-tuning corpus. -->
+            <Button
+                android:id="@+id/ar_capture"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="8dp"
+                android:textAllCaps="false"
+                android:text="@string/ar_capture"
+                android:visibility="gone" />
+
             <!-- Clears the scanner's memory — removed and rejected readings get a fresh try. -->
             <Button
                 android:id="@+id/ar_rescan"
