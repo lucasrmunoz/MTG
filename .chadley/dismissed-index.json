@@ -1,0 +1,9 @@
+[
+  {
+    "fingerprint": "8f69d6025c8744091a34531a04c1078fbcc2f668",
+    "kind": "logic",
+    "severity": "lfr",
+    "dismissedAt": "2026-08-05T20:22:15.683Z",
+    "dismissedAtContentSha": "cf5e3be6777940bf9ee48c751a0dff87e8d4f3bd559f72bd5464cba94b14604f"
+  }
+]
