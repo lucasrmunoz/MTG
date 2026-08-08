@@ -37,6 +37,10 @@
     <string name="ar_row_replace">Re-place</string>
     <string name="ar_row_remove">✕</string>
     <string name="ar_rescan">Rescan</string>
+    <string name="ar_guide">⌖ Scan card</string>
+    <string name="ar_guide_active">✕ Outline</string>
+    <string name="ar_status_guide">Fit one card in the outline, title at the top — it joins once recognised</string>
+    <string name="ar_guide_confirmed">✓ %1$s</string>
     <string name="ar_capture">⏺ Corpus</string>
     <string name="ar_capture_recording">⏹ %1$d</string>
     <string name="ar_capture_saved_toast">Saved %1$d corpus frames to %2$s</string>

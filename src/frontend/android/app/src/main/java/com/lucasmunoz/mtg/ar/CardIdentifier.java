@@ -59,6 +59,11 @@ final class CardIdentifier {
      */
     static final int ROTATION_DEGREES = 90;
 
+    /** The aimed card's title bar sits in the guide box's top; generous for imperfect aim. */
+    private static final float TITLE_BAND_FRAC = 0.35f;
+    /** The collector line hugs the aimed card's bottom edge. */
+    private static final float COLLECTOR_BAND_FRAC = 0.65f;
+
     private final TextRecognizer recognizer =
             TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
     private final ExecutorService lookupExecutor;
@@ -67,6 +72,27 @@ final class CardIdentifier {
 
     private volatile boolean recognizing;
     private long lastAttemptMs;
+
+    /**
+     * View-space {left, top, right, bottom} of the on-screen guide box, or null for ambient
+     * scanning. While set, reading is confined to the box: the title from its top band, the
+     * collector line from its bottom band, paired within that one aimed card — never
+     * frame-wide. That confinement is what makes guide scans immune to phantom cards and
+     * cross-card set mixups.
+     */
+    private volatile float[] guideBox;
+
+    /**
+     * Card names the guide box's title band resolved recently, by when they were last seen.
+     * Both reads in the box describe the same physical card, so a collector-line hit must
+     * agree with a resolved title to be adopted — a misread digit names a different card, and
+     * the title is the tiebreak. Empty means the title is unreadable (foil glare); then the
+     * collector line stands alone, as before. Guarded by this.
+     */
+    private final Map<String, Long> guideNamesSeenAtMs = new LinkedHashMap<>();
+
+    /** A box title older than this is stale — the user has re-aimed since. */
+    private static final long GUIDE_NAME_TTL_MS = 5000;
 
     /** One recognised card, remembering whether it came from the exact collector line. */
     private static final class Match {
@@ -101,6 +127,15 @@ final class CardIdentifier {
         this.scanListener = scanListener;
     }
 
+    /** Confines scanning to a view-space box, or null to return to ambient frame-wide reads. */
+    void setGuideBox(float[] viewBox) {
+        this.guideBox = viewBox;
+        synchronized (this) {
+            // Either direction is a fresh aim; titles from before the toggle prove nothing.
+            guideNamesSeenAtMs.clear();
+        }
+    }
+
     /** Called from the GL thread once per rendered frame; does nothing most of the time. */
     void maybeIdentify(Frame frame) {
         long now = SystemClock.elapsedRealtime();
@@ -128,10 +163,12 @@ final class CardIdentifier {
 
         lastAttemptMs = now;
         recognizing = true;
+        // Snapshot: the toggle must not switch modes between recognition and handling.
+        float[] guide = guideBox;
         InputImage input = InputImage.fromMediaImage(image, ROTATION_DEGREES);
         recognizer.process(input)
                 .addOnSuccessListener(text ->
-                        handleText(text, imageWidth, imageHeight, cornerViews))
+                        handleText(text, imageWidth, imageHeight, cornerViews, guide))
                 .addOnCompleteListener(task -> {
                     // The Image backs InputImage until processing completes; close it only now.
                     image.close();
@@ -139,7 +176,8 @@ final class CardIdentifier {
                 });
     }
 
-    private void handleText(Text text, int imageWidth, int imageHeight, float[] cornerViews) {
+    private void handleText(
+            Text text, int imageWidth, int imageHeight, float[] cornerViews, float[] guide) {
         List<float[]> outlines = new ArrayList<>();
         List<String> numbers = new ArrayList<>();
         List<String> setCodes = new ArrayList<>();
@@ -148,19 +186,21 @@ final class CardIdentifier {
             if (block.getLines().isEmpty()) {
                 continue;
             }
+            if (guide != null) {
+                readGuidedBlock(block, imageWidth, imageHeight, cornerViews, guide,
+                        outlines, numbers, setCodes);
+                continue;
+            }
+
             // A card's title is the first line of its own text block; deeper lines are type
             // lines and rules text, which fuzzy lookup would happily mis-match.
             String title = TitleHeuristics.clean(block.getLines().get(0).getText());
             if (title != null) {
                 Rect box = block.getBoundingBox();
                 if (box != null) {
-                    float[] imageBox = ScanGeometry.rotatedBoxToImage(
-                            new float[] {box.left, box.top, box.right, box.bottom},
-                            imageHeight, ROTATION_DEGREES);
-                    outlines.add(ScanGeometry.imageQuadToView(
-                            boxCorners(imageBox), imageWidth, imageHeight, cornerViews));
+                    outlines.add(viewQuadFor(box, imageWidth, imageHeight, cornerViews));
                 }
-                scheduleTitleLookup(title);
+                scheduleTitleLookup(title, false);
             }
 
             // The collector line at the card's bottom carries the exact printing; its number and
@@ -178,10 +218,54 @@ final class CardIdentifier {
         }
 
         for (SetLineHeuristics.SetAndNumber pair : SetLineHeuristics.pair(numbers, setCodes)) {
-            schedulePrintingLookup(pair);
+            schedulePrintingLookup(pair, guide != null);
         }
 
         scanListener.onScanActivity(outlines, snapshotPendingTitles());
+    }
+
+    /**
+     * Guide-box reading: only lines inside the box count, banded by where they sit on the aimed
+     * card — titles in the top band, collector data in the bottom band, the rules text between
+     * them ignored. Line-level rather than block-first, because a block can start outside the
+     * box or lump the title with the mana cost.
+     */
+    private void readGuidedBlock(Text.TextBlock block, int imageWidth, int imageHeight,
+            float[] cornerViews, float[] guide,
+            List<float[]> outlines, List<String> numbers, List<String> setCodes) {
+        for (Text.Line line : block.getLines()) {
+            Rect box = line.getBoundingBox();
+            if (box == null) {
+                continue;
+            }
+            float[] viewQuad = viewQuadFor(box, imageWidth, imageHeight, cornerViews);
+            if (ScanGeometry.centerInBand(viewQuad, guide, 0f, TITLE_BAND_FRAC)) {
+                String title = TitleHeuristics.clean(line.getText());
+                if (title != null) {
+                    outlines.add(viewQuad);
+                    scheduleTitleLookup(title, true);
+                }
+            } else if (ScanGeometry.centerInBand(viewQuad, guide, COLLECTOR_BAND_FRAC, 1f)) {
+                String number = SetLineHeuristics.parseNumber(line.getText());
+                if (number != null && !numbers.contains(number)) {
+                    numbers.add(number);
+                }
+                String setCode = SetLineHeuristics.parseSetCode(line.getText());
+                if (setCode != null && !setCodes.contains(setCode)) {
+                    setCodes.add(setCode);
+                }
+            }
+        }
+    }
+
+    /** An ML Kit bounding box as a view-space 4-corner polygon. */
+    private static float[] viewQuadFor(
+            Rect box, int imageWidth, int imageHeight, float[] cornerViews) {
+        float[] imageBox = ScanGeometry.rotatedBoxToImage(
+                new float[] {box.left, box.top, box.right, box.bottom},
+                imageHeight, ROTATION_DEGREES);
+        return ScanGeometry.imageQuadToView(
+                boxCorners(imageBox), imageWidth, imageHeight, cornerViews);
     }
 
     /** A box {l, t, r, b} as the 4-corner polygon the overlay draws. */
@@ -195,7 +279,7 @@ final class CardIdentifier {
         return new ArrayList<>(pendingDisplay.values());
     }
 
-    private void scheduleTitleLookup(String title) {
+    private void scheduleTitleLookup(String title, boolean guided) {
         String key = "title:" + title.toLowerCase();
         synchronized (this) {
             if (rejected.contains(key) || !pending.add(key)) {
@@ -203,11 +287,11 @@ final class CardIdentifier {
             }
             pendingDisplay.put(key, title);
         }
-        lookupExecutor.execute(() -> lookUp(key, false,
+        lookupExecutor.execute(() -> lookUp(key, false, guided,
                 () -> ScryfallLookup.findByFuzzyName(title)));
     }
 
-    private void schedulePrintingLookup(SetLineHeuristics.SetAndNumber pair) {
+    private void schedulePrintingLookup(SetLineHeuristics.SetAndNumber pair, boolean guided) {
         String key = "printing:" + pair.setCode + "/" + pair.collectorNumber;
         synchronized (this) {
             if (rejected.contains(key) || !pending.add(key)) {
@@ -215,7 +299,7 @@ final class CardIdentifier {
             }
             pendingDisplay.put(key, pair.setCode.toUpperCase() + " " + pair.collectorNumber);
         }
-        lookupExecutor.execute(() -> lookUp(key, true,
+        lookupExecutor.execute(() -> lookUp(key, true, guided,
                 () -> ScryfallLookup.bySetAndNumber(pair.setCode, pair.collectorNumber)));
     }
 
@@ -223,13 +307,24 @@ final class CardIdentifier {
         ScryfallLookup.CardSummary run() throws IOException;
     }
 
-    private void lookUp(String key, boolean exact, Lookup lookup) {
+    private void lookUp(String key, boolean exact, boolean guided, Lookup lookup) {
         try {
             ScryfallLookup.CardSummary card = lookup.run();
             if (card == null) {
                 synchronized (this) {
                     rememberRejection(key);
                 }
+                return;
+            }
+            if (guided && !exact) {
+                rememberGuideTitle(card.name);
+            }
+            if (guided && exact && !agreesWithGuideTitles(card.name)) {
+                // The collector line named a card the box's title does not corroborate — a
+                // misread digit, most likely. Not remembered as rejected: once the right title
+                // resolves (or the stale one ages out), a later pass may retry this reading.
+                Log.i(TAG, "Guide box: dropping " + key + " — " + card.name
+                        + " disagrees with the aimed card's title");
                 return;
             }
             List<ScryfallLookup.CardSummary> snapshot;
@@ -256,6 +351,18 @@ final class CardIdentifier {
             // Settled either way: the status line should stop saying this one is being checked.
             scanListener.onScanActivity(null, snapshotPendingTitles());
         }
+    }
+
+    /** Records a title the guide box resolved; collector-line hits are checked against it. */
+    private synchronized void rememberGuideTitle(String name) {
+        guideNamesSeenAtMs.put(name.toLowerCase(), SystemClock.elapsedRealtime());
+    }
+
+    /** True when no box title is live (the collector line stands alone) or the name matches. */
+    private synchronized boolean agreesWithGuideTitles(String name) {
+        long cutoff = SystemClock.elapsedRealtime() - GUIDE_NAME_TTL_MS;
+        guideNamesSeenAtMs.values().removeIf(seenAt -> seenAt < cutoff);
+        return guideNamesSeenAtMs.isEmpty() || guideNamesSeenAtMs.containsKey(name.toLowerCase());
     }
 
     /** Forgets a recognised card and refuses that name until the next {@link #rescan}. */

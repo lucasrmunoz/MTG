@@ -10,5 +10,6 @@ depend on *shipped* features but never on another proposal.
 | [Scan correction: remove, re-place, rescan](scan-correction.md) | Shipped 2026-08-05 |
 | [Flying and Reach altitude visuals](flying-reach-altitude.md) | Shipped 2026-08-05 |
 | [App identity and build hardening](app-identity-and-build.md) | Shipped 2026-08-05 |
-| [Full-card scanning with artwork identification](full-card-scanning.md) | Proposed (attempted and reverted 2026-08-05) |
+| [Guide-box scanning](guide-box-scanning.md) | Shipped 2026-08-06 |
+| [Full-card scanning with artwork identification](full-card-scanning.md) | Shelved (superseded by guide-box scanning; phase-0 tooling shipped) |
 | [Turn and reminder controls inside AR](ar-turn-reminder-controls.md) | Proposed |

@@ -9,8 +9,11 @@ import android.graphics.Bitmap;
 import android.opengl.GLES20;
 import android.opengl.GLSurfaceView;
 import android.opengl.Matrix;
+import android.os.Build;
 import android.os.Bundle;
+import android.os.SystemClock;
 import android.util.Log;
+import android.view.HapticFeedbackConstants;
 import android.view.Surface;
 import android.view.View;
 import android.view.WindowManager;
@@ -52,6 +55,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
@@ -167,6 +171,20 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     /** Titles the scanner is currently asking Scryfall about, for the status line. */
     private volatile List<String> pendingLookupTitles = Collections.emptyList();
 
+    /** Guide-box scanning: reads confined to a grey on-screen outline the user aims a card at.
+     *  Volatile — the scanner's lookup thread reads it to decide on confirmation feedback. */
+    private volatile boolean guideMode;
+    /** The guide outline's width as a share of the screen; height follows the 63:88 card. */
+    private static final float GUIDE_WIDTH_FRAC = 0.66f;
+    /** The outline's vertical centre, above the bottom panel and below the status line. */
+    private static final float GUIDE_CENTER_Y_FRAC = 0.40f;
+
+    /** Cards already celebrated this guide session — one buzz per card, not per lookup. */
+    private final Set<String> guideConfirmedNames = ConcurrentHashMap.newKeySet();
+    /** While now is before this, the status line shows a "✓ card" flash; updates hold off. */
+    private long statusFlashUntilMs;
+    private static final long STATUS_FLASH_MS = 1800;
+
     private final Object sessionLock = new Object();
     private Session session;
     /** True when reference images changed since the session last configured. Guarded by lock. */
@@ -228,6 +246,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 Toast.makeText(this, R.string.ar_rescan_toast, Toast.LENGTH_SHORT).show();
             }
         });
+        findViewById(R.id.ar_guide).setOnClickListener(v -> toggleGuideBox((Button) v));
         panel = findViewById(R.id.ar_panel);
         overlay = findViewById(R.id.ar_overlay);
         overlay.setListener(this);
@@ -340,6 +359,41 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     }
 
     /**
+     * Toggles guide-box scanning: a grey card-aspect outline appears mid-screen and the scanner
+     * only reads inside it — title from the top band, collector line from the bottom band,
+     * paired within that one aimed card. The deliberate, Mythic-Tools-style alternative to
+     * ambient scanning for when frame-wide reads misfire; ambient behaviour returns on toggle
+     * off.
+     */
+    private void toggleGuideBox(Button button) {
+        float width = overlay.getWidth();
+        float height = overlay.getHeight();
+        if (identifier == null || width == 0 || height == 0) {
+            return; // Not laid out yet; a tap this early has nothing to aim at anyway.
+        }
+        guideMode = !guideMode;
+        if (guideMode) {
+            guideConfirmedNames.clear();
+            float boxWidth = width * GUIDE_WIDTH_FRAC;
+            float boxHeight = boxWidth * CARD_HEIGHT_M / CARD_WIDTH_M;
+            float centerX = width / 2f;
+            float centerY = height * GUIDE_CENTER_Y_FRAC;
+            float[] box = {
+                    centerX - boxWidth / 2f, centerY - boxHeight / 2f,
+                    centerX + boxWidth / 2f, centerY + boxHeight / 2f,
+            };
+            overlay.setGuideBox(box);
+            identifier.setGuideBox(box);
+            button.setText(R.string.ar_guide_active);
+        } else {
+            overlay.setGuideBox(null);
+            identifier.setGuideBox(null);
+            button.setText(R.string.ar_guide);
+        }
+        updateStatusLine();
+    }
+
+    /**
      * The phase-0 corpus capture toggle (docs/proposals/full-card-scanning.md), debug builds
      * only: while recording, the GL thread hands Y-plane frames to the recorder, which files
      * them under the app's external files so they can be pulled to the desktop replay harness.
@@ -429,8 +483,10 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 added.typeLine = candidate.typeLine;
                 added.setName = candidate.setName;
                 runOnUiThread(() -> adoptCard(added, true));
+                maybeFlashGuideConfirm(candidate);
             } else if (existing.printingUrls.putIfAbsent(candidate.id, candidate.imageUrl)
                     == null) {
+                maybeFlashGuideConfirm(candidate);
                 // A more precise reading — usually the collector line — named another printing
                 // of a card already here. That printing is almost certainly the physical copy,
                 // so it joins the reference images, and the counters key onto it until tracking
@@ -464,6 +520,27 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             overlay.setScanQuads(cardOutlines);
         }
         runOnUiThread(this::updateStatusLine);
+    }
+
+    /**
+     * The "got it" moment of guide-box scanning: the first time an aimed card confirms — by
+     * name or by exact printing — the status line flashes it with a tap of haptics, telling
+     * the user to move to the next card. Off the main thread; once per card per session.
+     */
+    private void maybeFlashGuideConfirm(ScryfallLookup.CardSummary card) {
+        if (!guideMode || !guideConfirmedNames.add(card.name)) {
+            return;
+        }
+        runOnUiThread(() -> {
+            String label = card.setName.isEmpty() ? card.name
+                    : card.name + " — " + card.setName;
+            statusText.setText(getString(R.string.ar_guide_confirmed, label));
+            statusFlashUntilMs = SystemClock.uptimeMillis() + STATUS_FLASH_MS;
+            statusText.postDelayed(this::updateStatusLine, STATUS_FLASH_MS);
+            statusText.performHapticFeedback(Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                    ? HapticFeedbackConstants.CONFIRM
+                    : HapticFeedbackConstants.VIRTUAL_KEY);
+        });
     }
 
     private boolean isCommanderName(String name) {
@@ -990,6 +1067,9 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     }
 
     private void updateStatusLine() {
+        if (SystemClock.uptimeMillis() < statusFlashUntilMs) {
+            return; // A "✓ card" flash is showing; the scheduled reset restores the line.
+        }
         String pendingKey = pendingPlacementKey;
         if (pendingKey != null) {
             ActiveCard pending = cardsByKey.get(pendingKey);
@@ -1012,8 +1092,8 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 statusText.setText(getString(R.string.ar_status_tracking, card.name));
             } else {
                 String checking = checkingStatus();
-                statusText.setText(
-                        checking != null ? checking : getString(R.string.ar_status_game));
+                statusText.setText(checking != null ? checking : getString(
+                        guideMode ? R.string.ar_status_guide : R.string.ar_status_game));
             }
             return;
         }
@@ -1022,7 +1102,8 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             return;
         }
         String checking = checkingStatus();
-        statusText.setText(checking != null ? checking : getString(R.string.ar_status_scan));
+        statusText.setText(checking != null ? checking : getString(
+                guideMode ? R.string.ar_status_guide : R.string.ar_status_scan));
     }
 
     /** "Reading X — checking Scryfall…" while lookups are in flight, or null when idle. */

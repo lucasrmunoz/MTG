@@ -1,9 +1,12 @@
 # Full-card scanning with artwork identification
 
-**Status: phase 0 tooling in place** — the in-app corpus recorder (debug builds, the ⏺ Corpus
-toggle in the AR screen) and the desktop replay harness (`tools/scan-harness/ReplayHarness.java`)
-exist; the ≥50-frame table corpus is still to be captured. The full pipeline was attempted
-2026-08-05 (commit `9aaf5b1`) and reverted the same day. This
+**Status: shelved 2026-08-06** — superseded by [guide-box scanning](guide-box-scanning.md),
+which achieves the structural confinement (title and collector line paired within one card) by
+having the user aim a fixed outline instead of auto-detecting quads. Revisit only if ambient
+misreads stay painful with the guide box available. The phase-0 tooling shipped and stays: the
+in-app corpus recorder (debug builds, the ⏺ Corpus toggle) and the desktop replay harness
+(`tools/scan-harness/ReplayHarness.java`) serve any future camera-tuning question. The full
+pipeline was attempted 2026-08-05 (commit `9aaf5b1`) and reverted the same day. This
 is ONE proposal, not several: banded OCR needs a detected quad to warp, artwork ranking needs
 the warped image to hash, and the overlay-stability fallback needs per-frame quads. Build it
 in phase order or not at all.

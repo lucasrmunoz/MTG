@@ -50,4 +50,25 @@ final class ScanGeometry {
         }
         return out;
     }
+
+    /**
+     * Whether the quad's centre falls inside a horizontal band of the box: the full box width,
+     * vertically from topFrac to bottomFrac of the box's height. Box is {left, top, right,
+     * bottom} in the same coordinate space as the quad — the guide-box scanner uses view space,
+     * where the aimed card is upright, so "top band" means the card's title bar.
+     */
+    static boolean centerInBand(float[] quad, float[] box, float topFrac, float bottomFrac) {
+        float cx = 0f;
+        float cy = 0f;
+        for (int i = 0; i < 4; i++) {
+            cx += quad[i * 2];
+            cy += quad[i * 2 + 1];
+        }
+        cx /= 4f;
+        cy /= 4f;
+        float height = box[3] - box[1];
+        return cx >= box[0] && cx <= box[2]
+                && cy >= box[1] + topFrac * height
+                && cy <= box[1] + bottomFrac * height;
+    }
 }

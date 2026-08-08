@@ -163,6 +163,11 @@ public final class CardOverlayView extends View {
     private final Path shadowPath = new Path();
     private final Path altitudePath = new Path();
 
+    /** The grey card-aspect outline of guide-box scanning; null when ambient scanning. */
+    private volatile float[] guideBox;
+    private final RectF guideRect = new RectF();
+    private final Paint guidePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
     /** Card quads the scanner spotted this pass; stale ones stop drawing, not linger. */
     private volatile List<float[]> scanQuads = Collections.emptyList();
     private volatile long scanQuadsAtMs;
@@ -206,6 +211,9 @@ public final class CardOverlayView extends View {
         scanBorder.setStyle(Paint.Style.STROKE);
         scanBorder.setStrokeWidth(dp(2.5f));
         scanBorder.setColor(Color.argb(220, 46, 204, 113));
+        guidePaint.setStyle(Paint.Style.STROKE);
+        guidePaint.setStrokeWidth(dp(2.5f));
+        guidePaint.setColor(Color.argb(220, 189, 195, 199));
         shadowFill.setStyle(Paint.Style.FILL);
         shadowFill.setColor(Color.argb(80, 0, 0, 0));
         altitudePaint.setStyle(Paint.Style.STROKE);
@@ -311,6 +319,12 @@ public final class CardOverlayView extends View {
     void postGeometry(List<CardPose> newPoses, List<TokenPose> newTokenPoses) {
         poses = newPoses;
         tokenPoses = newTokenPoses;
+        postInvalidate();
+    }
+
+    /** Shows the grey guide outline at these view coords {l, t, r, b}; null hides it. */
+    void setGuideBox(float[] box) {
+        guideBox = box;
         postInvalidate();
     }
 
@@ -443,6 +457,11 @@ public final class CardOverlayView extends View {
 
     @Override
     protected void onDraw(Canvas canvas) {
+        float[] guide = guideBox;
+        if (guide != null) {
+            guideRect.set(guide[0], guide[1], guide[2], guide[3]);
+            canvas.drawRoundRect(guideRect, dp(12), dp(12), guidePaint);
+        }
         if (SystemClock.elapsedRealtime() - scanQuadsAtMs <= SCAN_REGION_TTL_MS) {
             for (float[] quad : scanQuads) {
                 scanPath.rewind();

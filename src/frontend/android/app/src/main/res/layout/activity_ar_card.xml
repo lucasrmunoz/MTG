@@ -58,6 +58,15 @@
                 android:textAllCaps="false"
                 android:visibility="gone" />
 
+            <!-- Guide-box scanning: fit one card in the grey outline for a precise read. -->
+            <Button
+                android:id="@+id/ar_guide"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:textAllCaps="false"
+                android:text="@string/ar_guide" />
+
             <View
                 android:layout_width="0dp"
                 android:layout_height="0dp"

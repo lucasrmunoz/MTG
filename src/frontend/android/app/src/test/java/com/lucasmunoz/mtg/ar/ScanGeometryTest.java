@@ -1,7 +1,9 @@
 package com.lucasmunoz.mtg.ar;
 
 import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
@@ -56,5 +58,31 @@ public class ScanGeometryTest {
         float[] quad = {0, 0, 640, 0, 640, 480, 0, 480};
         assertArrayEquals(new float[] {-60, 0, 1020, 0, 1020, 810, -60, 810},
                 ScanGeometry.imageQuadToView(quad, 640, 480, corners), 0.01f);
+    }
+
+    /** A 100x200 box at (100,100); its title band is the top 35%, rows 100..170. */
+    private static final float[] BOX = {100, 100, 200, 300};
+
+    private static float[] quadAt(float cx, float cy) {
+        return new float[] {cx - 5, cy - 2, cx + 5, cy - 2, cx + 5, cy + 2, cx - 5, cy + 2};
+    }
+
+    @Test
+    public void titleBandAcceptsTheBoxTopAndRejectsTheMiddle() {
+        assertTrue(ScanGeometry.centerInBand(quadAt(150, 120), BOX, 0f, 0.35f));
+        assertFalse(ScanGeometry.centerInBand(quadAt(150, 200), BOX, 0f, 0.35f));
+    }
+
+    @Test
+    public void collectorBandAcceptsTheBoxBottomAndRejectsTheMiddle() {
+        assertTrue(ScanGeometry.centerInBand(quadAt(150, 280), BOX, 0.65f, 1f));
+        assertFalse(ScanGeometry.centerInBand(quadAt(150, 200), BOX, 0.65f, 1f));
+    }
+
+    @Test
+    public void bandsRejectCentresOutsideTheBoxEntirely() {
+        assertFalse(ScanGeometry.centerInBand(quadAt(50, 120), BOX, 0f, 0.35f));
+        assertFalse(ScanGeometry.centerInBand(quadAt(150, 40), BOX, 0f, 1f));
+        assertFalse(ScanGeometry.centerInBand(quadAt(150, 340), BOX, 0f, 1f));
     }
 }
