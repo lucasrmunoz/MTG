@@ -5,5 +5,12 @@
     "severity": "lfr",
     "dismissedAt": "2026-08-05T20:22:15.683Z",
     "dismissedAtContentSha": "cf5e3be6777940bf9ee48c751a0dff87e8d4f3bd559f72bd5464cba94b14604f"
+  },
+  {
+    "fingerprint": "081512f3d67a3b59ba29529002b99e7e19f7c26a",
+    "kind": "feature",
+    "severity": "normal",
+    "dismissedAt": "2026-08-09T22:17:18.749Z",
+    "dismissedAtContentSha": "37205936d1aacbc6c903b31aeee71e6b825849604b34eb90074a91d3896aec98"
   }
 ]
