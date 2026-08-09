@@ -16,20 +16,22 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 
 /**
- * Reads card titles off camera frames and turns them into candidate cards.
+ * Reads whole cards off camera frames and turns them into candidate cards.
  *
- * On-device OCR (ML Kit) pulls text lines out of a frame; lines that could be a title go through
- * Scryfall's fuzzy lookup, which forgives OCR misreads the way it forgives typos. Every distinct
- * hit becomes a candidate for the user to tap. This never guesses from card *shape* — a match
- * only exists once Scryfall confirms a real card name, and tracking still runs on registered
- * reference scans afterwards. Wrong reads are correctable: a removed card's name stays out
- * until {@link #rescan} deliberately reopens everything.
+ * On-device OCR (ML Kit) pulls text lines out of a frame; every line is matched locally
+ * against the cached Scryfall name catalog, so a card identifies in one pass without a
+ * network round trip per reading. Only a name the catalog actually confirms costs a network
+ * call — the exact-name fetch that brings images and details. This never guesses from card
+ * *shape*, and an ambiguous read matches nothing rather than picking a card. Wrong reads are
+ * correctable: a removed card's name stays out until {@link #rescan} deliberately reopens
+ * everything.
  */
 final class CardIdentifier {
 
@@ -41,8 +43,8 @@ final class CardIdentifier {
     interface ScanListener {
         /**
          * Live scanning feedback, called off the main thread. After each OCR pass, outlines
-         * holds a view-space 4-corner polygon (8 floats) per plausible card title in frame;
-         * when a Scryfall lookup settles the call carries null outlines (the ones on screen
+         * holds a view-space 4-corner polygon (8 floats) per text line being read;
+         * when a lookup settles the call carries null outlines (the ones on screen
          * are still current) with the refreshed pending list.
          */
         void onScanActivity(List<float[]> outlines, List<String> pendingTitles);
@@ -68,6 +70,7 @@ final class CardIdentifier {
     private final TextRecognizer recognizer =
             TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
     private final ExecutorService lookupExecutor;
+    private final CardNameCatalog catalog;
     private final Listener listener;
     private final ScanListener scanListener;
 
@@ -76,23 +79,23 @@ final class CardIdentifier {
 
     /**
      * View-space {left, top, right, bottom} of the on-screen guide box, or null for ambient
-     * scanning. While set, reading is confined to the box: the title from its top band, the
-     * collector line from its bottom band, paired within that one aimed card — never
-     * frame-wide. That confinement is what makes guide scans immune to phantom cards and
-     * cross-card set mixups.
+     * scanning. While set, reading is confined to the box: every line inside it is matched
+     * against the whole-card name catalog and the collector line is parsed from the same
+     * lines, all describing the one aimed card — never frame-wide.
      */
     private volatile float[] guideBox;
 
     /**
-     * Card names the guide box's title band resolved recently, by when they were last seen.
-     * Both reads in the box describe the same physical card, so a collector-line hit must
-     * agree with a resolved title to be adopted — a misread digit names a different card, and
-     * the title is the tiebreak. Empty means the title is unreadable (foil glare); then the
-     * collector line stands alone, as before. Guarded by this.
+     * Card names the guide box matched recently, by when they were last seen. Both reads in
+     * the box describe the same physical card, so a collector-line hit must agree with a
+     * matched name to be adopted — a misread digit names a different card, and the name is
+     * the tiebreak. Empty means no name is readable (foil glare); then the collector line
+     * stands alone. Fed by instant local catalog matches, so the old race against a slow
+     * network title lookup is gone. Guarded by this.
      */
     private final Map<String, Long> guideNamesSeenAtMs = new LinkedHashMap<>();
 
-    /** A box title older than this is stale — the user has re-aimed since. */
+    /** A box name older than this is stale — the user has re-aimed since. */
     private static final long GUIDE_NAME_TTL_MS = 5000;
 
     /** One recognised card, remembering whether it came from the exact collector line. */
@@ -113,7 +116,7 @@ final class CardIdentifier {
     private final Map<String, String> pendingDisplay = new LinkedHashMap<>();
     /**
      * Candidates keyed by card name. A collector-line hit ("SPM 195") names the exact printing
-     * on the table and replaces a fuzzy name hit for the same card, which for a basic land would
+     * on the table and replaces a name hit for the same card, which for a basic land would
      * otherwise float arbitrary artwork.
      */
     private final Map<String, Match> matchedByName = new LinkedHashMap<>();
@@ -122,8 +125,10 @@ final class CardIdentifier {
      *  rejoins within a frame — a removal silences the name until the next {@link #rescan}. */
     private final Set<String> dismissedNames = new HashSet<>();
 
-    CardIdentifier(ExecutorService lookupExecutor, Listener listener, ScanListener scanListener) {
+    CardIdentifier(ExecutorService lookupExecutor, CardNameCatalog catalog, Listener listener,
+            ScanListener scanListener) {
         this.lookupExecutor = lookupExecutor;
+        this.catalog = catalog;
         this.listener = listener;
         this.scanListener = scanListener;
     }
@@ -132,7 +137,7 @@ final class CardIdentifier {
     void setGuideBox(float[] viewBox) {
         this.guideBox = viewBox;
         synchronized (this) {
-            // Either direction is a fresh aim; titles from before the toggle prove nothing.
+            // Either direction is a fresh aim; names from before the toggle prove nothing.
             guideNamesSeenAtMs.clear();
         }
     }
@@ -178,9 +183,15 @@ final class CardIdentifier {
                 });
     }
 
+    /**
+     * Collects the pass's readings and hands them to the resolver on the lookup thread —
+     * catalog matching over tens of thousands of names is milliseconds of work, but not
+     * main-thread milliseconds.
+     */
     private void handleText(
             Text text, int imageWidth, int imageHeight, float[] cornerViews, float[] guide) {
         List<float[]> outlines = new ArrayList<>();
+        List<String> lines = new ArrayList<>();
         List<String> numbers = new ArrayList<>();
         List<String> setCodes = new ArrayList<>();
 
@@ -190,19 +201,19 @@ final class CardIdentifier {
             }
             if (guide != null) {
                 readGuidedBlock(block, imageWidth, imageHeight, cornerViews, guide,
-                        outlines, numbers, setCodes);
+                        outlines, lines, numbers, setCodes);
                 continue;
             }
 
             // A card's title is the first line of its own text block; deeper lines are type
-            // lines and rules text, which fuzzy lookup would happily mis-match.
+            // lines and rules text, which name matching would have to wade through for nothing.
             String title = TitleHeuristics.clean(block.getLines().get(0).getText());
             if (title != null) {
                 Rect box = block.getBoundingBox();
                 if (box != null) {
                     outlines.add(viewQuadFor(box, imageWidth, imageHeight, cornerViews));
                 }
-                scheduleTitleLookup(title, false);
+                lines.add(title);
             }
 
             // The collector line at the card's bottom carries the exact printing; its number and
@@ -219,24 +230,24 @@ final class CardIdentifier {
             }
         }
 
-        for (SetLineHeuristics.SetAndNumber pair : SetLineHeuristics.pair(numbers, setCodes)) {
-            schedulePrintingLookup(pair, guide != null);
-        }
+        List<SetLineHeuristics.SetAndNumber> pairs = SetLineHeuristics.pair(numbers, setCodes);
+        boolean guided = guide != null;
+        lookupExecutor.execute(() -> resolveReadings(lines, pairs, guided));
 
         scanListener.onScanActivity(outlines, snapshotPendingTitles());
     }
 
     /**
-     * Guide-box reading: every line inside the outline (plus a little margin) is tried as both
-     * a title and a collector line — the box already confines reads to one aimed card, so the
-     * whole card is searched without the frame-wide hazards. Line-level rather than
-     * block-first, because a block can start outside the box or lump the title with the mana
-     * cost. Rules-text lines that pass the title filter die in Scryfall's fuzzy 404s, and the
-     * title cross-check guards the printing.
+     * Guide-box reading: every line inside the outline (plus a little margin) goes into the
+     * pass — the box already confines reads to one aimed card, so the whole card is searched
+     * at once without the frame-wide hazards. Line-level rather than block-first, because a
+     * block can start outside the box or lump the title with the mana cost. Every in-box line
+     * lights the outline: the feedback is about where the reader is looking.
      */
     private void readGuidedBlock(Text.TextBlock block, int imageWidth, int imageHeight,
             float[] cornerViews, float[] guide,
-            List<float[]> outlines, List<String> numbers, List<String> setCodes) {
+            List<float[]> outlines, List<String> lines, List<String> numbers,
+            List<String> setCodes) {
         float marginX = (guide[2] - guide[0]) * GUIDE_MARGIN_FRAC;
         float marginY = (guide[3] - guide[1]) * GUIDE_MARGIN_FRAC;
         float[] reach = {
@@ -251,26 +262,54 @@ final class CardIdentifier {
             if (!ScanGeometry.centerInBand(viewQuad, reach, 0f, 1f)) {
                 continue;
             }
-            boolean read = false;
-            String title = TitleHeuristics.clean(line.getText());
-            if (title != null) {
-                read = true;
-                scheduleTitleLookup(title, true);
-            }
+            lines.add(line.getText());
             String number = SetLineHeuristics.parseNumber(line.getText());
             if (number != null && !numbers.contains(number)) {
-                read = true;
                 numbers.add(number);
             }
             String setCode = SetLineHeuristics.parseSetCode(line.getText());
             if (setCode != null && !setCodes.contains(setCode)) {
-                read = true;
                 setCodes.add(setCode);
             }
-            if (read) {
-                // Anything usable lights the outline green via the scan-activity callback.
-                outlines.add(viewQuad);
+            outlines.add(viewQuad);
+        }
+    }
+
+    /**
+     * One pass's whole-card resolution, on the lookup thread. Every line is matched against
+     * the local catalog; each matched name costs one exact fetch, misses cost nothing. The
+     * network fuzzy lookup survives only as a last resort — a guided pass where the whole box
+     * matched nothing (heavy glare, a finger over the title), or a pass before the catalog
+     * has ever loaded — and then fires once for the pass, not once per line.
+     */
+    private void resolveReadings(
+            List<String> lines, List<SetLineHeuristics.SetAndNumber> pairs, boolean guided) {
+        Set<String> names = new LinkedHashSet<>();
+        for (String line : lines) {
+            String name = catalog.bestMatch(line);
+            if (name != null) {
+                names.add(name);
             }
+        }
+        for (String name : names) {
+            if (guided) {
+                rememberGuideName(name);
+            }
+            scheduleNameLookup(name);
+        }
+
+        if (names.isEmpty() && (guided || !catalog.isReady())) {
+            for (String line : lines) {
+                String title = TitleHeuristics.clean(line);
+                if (title != null) {
+                    scheduleFuzzyLookup(title, guided);
+                    break;
+                }
+            }
+        }
+
+        for (SetLineHeuristics.SetAndNumber pair : pairs) {
+            schedulePrintingLookup(pair, guided);
         }
     }
 
@@ -295,7 +334,22 @@ final class CardIdentifier {
         return new ArrayList<>(pendingDisplay.values());
     }
 
-    private void scheduleTitleLookup(String title, boolean guided) {
+    /** Fetches details for a name the catalog confirmed — the one network call a card costs. */
+    private void scheduleNameLookup(String name) {
+        String key = "name:" + name.toLowerCase();
+        synchronized (this) {
+            if (rejected.contains(key) || matchedByName.containsKey(name.toLowerCase())
+                    || !pending.add(key)) {
+                return;
+            }
+            pendingDisplay.put(key, name);
+        }
+        lookupExecutor.execute(() -> lookUp(key, false, false,
+                () -> ScryfallLookup.findByExactName(name)));
+    }
+
+    /** The last-resort network fuzzy lookup for a pass no catalog match could explain. */
+    private void scheduleFuzzyLookup(String title, boolean guided) {
         String key = "title:" + title.toLowerCase();
         synchronized (this) {
             if (rejected.contains(key) || !pending.add(key)) {
@@ -333,14 +387,14 @@ final class CardIdentifier {
                 return;
             }
             if (guided && !exact) {
-                rememberGuideTitle(card.name);
+                rememberGuideName(card.name);
             }
-            if (guided && exact && !agreesWithGuideTitles(card.name)) {
-                // The collector line named a card the box's title does not corroborate — a
-                // misread digit, most likely. Not remembered as rejected: once the right title
-                // resolves (or the stale one ages out), a later pass may retry this reading.
+            if (guided && exact && !agreesWithGuideNames(card.name)) {
+                // The collector line named a card the box's matched name does not corroborate —
+                // a misread digit, most likely. Not remembered as rejected: once the right name
+                // matches (or the stale one ages out), a later pass may retry this reading.
                 Log.i(TAG, "Guide box: dropping " + key + " — " + card.name
-                        + " disagrees with the aimed card's title");
+                        + " disagrees with the aimed card's name");
                 return;
             }
             List<ScryfallLookup.CardSummary> snapshot;
@@ -369,13 +423,13 @@ final class CardIdentifier {
         }
     }
 
-    /** Records a title the guide box resolved; collector-line hits are checked against it. */
-    private synchronized void rememberGuideTitle(String name) {
+    /** Records a name the guide box matched; collector-line hits are checked against it. */
+    private synchronized void rememberGuideName(String name) {
         guideNamesSeenAtMs.put(name.toLowerCase(), SystemClock.elapsedRealtime());
     }
 
-    /** True when no box title is live (the collector line stands alone) or the name matches. */
-    private synchronized boolean agreesWithGuideTitles(String name) {
+    /** True when no box name is live (the collector line stands alone) or the name matches. */
+    private synchronized boolean agreesWithGuideNames(String name) {
         long cutoff = SystemClock.elapsedRealtime() - GUIDE_NAME_TTL_MS;
         guideNamesSeenAtMs.values().removeIf(seenAt -> seenAt < cutoff);
         return guideNamesSeenAtMs.isEmpty() || guideNamesSeenAtMs.containsKey(name.toLowerCase());
@@ -399,7 +453,7 @@ final class CardIdentifier {
         rejected.clear();
     }
 
-    /** Records a hit; an exact printing displaces a fuzzy hit for the same card name. */
+    /** Records a hit; an exact printing displaces a name hit for the same card. */
     private List<ScryfallLookup.CardSummary> addMatch(
             ScryfallLookup.CardSummary card, boolean exact) {
         String nameKey = card.name.toLowerCase();

@@ -2,8 +2,12 @@
 
 **Status: shelved 2026-08-06** — superseded by [guide-box scanning](guide-box-scanning.md),
 which achieves the structural confinement (title and collector line paired within one card) by
-having the user aim a fixed outline instead of auto-detecting quads. Revisit only if ambient
-misreads stay painful with the guide box available. The phase-0 tooling shipped and stays: the
+having the user aim a fixed outline instead of auto-detecting quads. The guide box's slow
+per-section read chain was replaced 2026-08-09 by whole-card local name matching
+(`CardNameCatalog`: the Scryfall name catalog cached on-device, every OCR line matched
+locally, one network fetch per adopted card) — the corpus prerequisite was waived along with
+it, since no CV thresholds ship. Revisit the quad/dHash chain only if text identification
+stays unreliable even at whole-card speed. The phase-0 tooling shipped and stays: the
 in-app corpus recorder (debug builds, the ⏺ Corpus toggle) and the desktop replay harness
 (`tools/scan-harness/ReplayHarness.java`) serve any future camera-tuning question. The full
 pipeline was attempted 2026-08-05 (commit `9aaf5b1`) and reverted the same day. This

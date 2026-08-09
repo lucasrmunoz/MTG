@@ -283,9 +283,13 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
 
         // The scanner always runs, in game mode too: any table card can join the scene with
         // its own counters. Commander names are filtered out of its candidates — those are
-        // already tracked under per-player keys.
+        // already tracked under per-player keys. The name catalog is what lets it match
+        // whole cards locally; loading it races the user's first aim and usually wins.
+        CardNameCatalog catalog =
+                new CardNameCatalog(new File(getFilesDir(), "scryfall-card-names.json"));
+        scanExecutor.execute(catalog::ensureLoaded);
         identifier = new CardIdentifier(
-                scanExecutor, this::onCandidatesRecognized, this::onScanActivity);
+                scanExecutor, catalog, this::onCandidatesRecognized, this::onScanActivity);
 
         if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
             wireCorpusCapture();

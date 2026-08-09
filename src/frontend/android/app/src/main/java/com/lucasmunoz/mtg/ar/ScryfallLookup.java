@@ -64,6 +64,33 @@ final class ScryfallLookup {
     }
 
     /**
+     * Exact name lookup for a name the local catalog already matched — no fuzzy tolerance
+     * needed, the catalog match settled which card it is. Null on the rare 404 (a catalog
+     * fresher than the card database).
+     */
+    static CardSummary findByExactName(String name) throws IOException {
+        JSONObject json = getJson(BASE + "/cards/named?exact=" + encode(name));
+        if (json == null) {
+            return null;
+        }
+        try {
+            CardSummary card = parseCard(json);
+            return card != null && card.imageUrl != null ? card : null;
+        } catch (JSONException e) {
+            throw new IOException("Could not parse Scryfall's exact lookup response.", e);
+        }
+    }
+
+    /** The card-name catalog's raw JSON — every name Scryfall knows, ~2 MB, cached on disk. */
+    static String cardNamesJson() throws IOException {
+        String body = getBody(BASE + "/catalog/card-names");
+        if (body == null) {
+            throw new IOException("Scryfall's card-name catalog returned 404.");
+        }
+        return body;
+    }
+
+    /**
      * The exact printing at a set code and collector number — "spm 195" is one card where a name
      * matches hundreds of artworks. Null when Scryfall knows no such printing, which is how OCR
      * false positives get discarded.
@@ -163,6 +190,19 @@ final class ScryfallLookup {
 
     /** GET returning parsed JSON, null on 404, IOException on anything else going wrong. */
     private static JSONObject getJson(String url) throws IOException {
+        String body = getBody(url);
+        if (body == null) {
+            return null;
+        }
+        try {
+            return new JSONObject(body);
+        } catch (JSONException e) {
+            throw new IOException("Scryfall returned unparseable JSON for " + url, e);
+        }
+    }
+
+    /** GET returning the raw body, null on 404, IOException on anything else going wrong. */
+    private static String getBody(String url) throws IOException {
         HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
         connection.setConnectTimeout(10_000);
         connection.setReadTimeout(15_000);
@@ -181,9 +221,7 @@ final class ScryfallLookup {
             try (InputStream stream = connection.getInputStream();
                     Scanner scanner = new Scanner(stream, StandardCharsets.UTF_8.name())
                             .useDelimiter("\\A")) {
-                return new JSONObject(scanner.hasNext() ? scanner.next() : "");
-            } catch (JSONException e) {
-                throw new IOException("Scryfall returned unparseable JSON for " + url, e);
+                return scanner.hasNext() ? scanner.next() : "";
             }
         } finally {
             connection.disconnect();
