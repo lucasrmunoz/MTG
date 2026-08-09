@@ -14,14 +14,16 @@ card into a fixed on-screen outline, the way Mythic Tools scans.
 
 ## Design
 
-A "⌖ Scan card" toggle in the AR screen shows a grey card-aspect (63:88) outline centered
-mid-screen. While it is up, the scanner reads **only inside the outline**, banded by card
-layout in view space, where the aimed card is upright:
+Pure scan mode **starts with the outline up** — a grey card-aspect (63:88) outline centered
+mid-screen; the "✕ Outline" toggle drops back to ambient. While it is up, the scanner reads
+**only inside the outline** (plus a 10% margin for cards that overflow it), polling at roughly
+double the ambient cadence:
 
-- **Title** from lines whose centre falls in the top 35% of the box.
-- **Collector number and set code** from lines in the bottom 35%, paired with each other there
-  — never with anything outside the box.
-- The middle 30% — rules text, the fuzzy-match hazard — is ignored entirely.
+- **Every line in the box** is tried as both a title and a collector read — the box confines
+  everything to the one aimed card, so the whole card is searched without frame-wide hazards.
+  Rules-text lines that slip past the title filter die in Scryfall's fuzzy 404s.
+- **The outline turns green** while card text is being read inside it, Mythic-style; grey
+  means aim or lighting isn't giving the OCR anything.
 - **Cross-check:** both reads describe the same physical card, so a collector-line hit is
   adopted only when its card name agrees with a title the box resolved in the last 5 seconds
   — a misread digit names a different card, and the title is the tiebreak. With no live title
@@ -29,6 +31,10 @@ layout in view space, where the aimed card is upright:
   remembered as rejected, so a later pass retries once the right title resolves.
 - **Confirmation:** the first time an aimed card confirms, the status line flashes
   "✓ Name — Set" with a haptic tap: aim, buzz, next card.
+
+Identification stays text-based (OCR → Scryfall). Whole-card *image* matching the way Mythic
+Tools does it needs a bundled image-hash index and the shelved full-card chain — that is the
+escalation path if text reads stay unreliable, not part of this feature.
 
 No computer vision, no thresholds, no calibration corpus: the box is fixed view coordinates,
 and the view↔image mapping is the same `transformCoordinates2d` affine the ambient scanner

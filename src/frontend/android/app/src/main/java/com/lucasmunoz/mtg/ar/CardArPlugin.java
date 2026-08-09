@@ -57,8 +57,8 @@ public class CardArPlugin extends Plugin {
     /**
      * Opens the AR game session: each player's recognised commander gets a badge with its
      * owner's name, life and tax, adjustable in place. Resolves with the updated players when
-     * the screen closes. Players without a commander card ride along untracked — they come back
-     * in the result but cannot be adjusted in AR.
+     * the screen closes. Commanders are optional: a player without one keeps an adjustable
+     * life token, and any card scanned at the table can be bound as their commander in AR.
      */
     @PluginMethod
     public void openGame(PluginCall call) {

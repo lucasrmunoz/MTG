@@ -146,6 +146,8 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     private View lifeRow;
     private View statRow;
     private View keywordButton;
+    /** Game mode only: binds the focused scanned card to a player as their commander. */
+    private View setCommanderButton;
     private TextView hintText;
     private Button cardsToggle;
     private View cardListScroll;
@@ -232,6 +234,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         lifeRow = findViewById(R.id.ar_life_row);
         statRow = findViewById(R.id.ar_stat_row);
         keywordButton = findViewById(R.id.ar_keyword);
+        setCommanderButton = findViewById(R.id.ar_set_commander);
         hintText = findViewById(R.id.ar_hint_text);
         cardsToggle = findViewById(R.id.ar_cards_toggle);
         cardListScroll = findViewById(R.id.ar_card_list_scroll);
@@ -290,10 +293,28 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
 
         if (game != null) {
             enterGameMode();
+            // Game mode scans the same way: start aimed, "✕ Outline" drops to ambient.
+            overlay.post(this::enableGuideByDefault);
         } else {
             statusText.setText(R.string.ar_status_scan);
             addCardFromIntent();
+            if (getIntent().getStringExtra(EXTRA_CARD_ID) == null) {
+                // Pure scan mode exists to read cards: start aimed, no toggle required.
+                overlay.post(this::enableGuideByDefault);
+            }
         }
+    }
+
+    /** Turns the guide box on once the overlay has a size; re-posts until layout has run. */
+    private void enableGuideByDefault() {
+        if (guideMode || isFinishing()) {
+            return;
+        }
+        if (overlay.getWidth() == 0) {
+            overlay.post(this::enableGuideByDefault);
+            return;
+        }
+        toggleGuideBox(findViewById(R.id.ar_guide));
     }
 
     /**
@@ -518,6 +539,9 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         pendingLookupTitles = pendingTitles;
         if (cardOutlines != null) {
             overlay.setScanQuads(cardOutlines);
+            if (guideMode && !cardOutlines.isEmpty()) {
+                overlay.markGuideBoxActive();
+            }
         }
         runOnUiThread(this::updateStatusLine);
     }
@@ -1141,6 +1165,12 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         wireStatButton(R.id.ar_stat_mp, -1, 1);
         findViewById(R.id.ar_stat_custom).setOnClickListener(v -> showCustomStatDialog());
         findViewById(R.id.ar_keyword).setOnClickListener(v -> showKeywordDialog());
+        findViewById(R.id.ar_set_commander).setOnClickListener(v -> {
+            ActiveCard card = focusedKey == null ? null : cardsByKey.get(focusedKey);
+            if (game != null && card != null && !isGameCard(card.key)) {
+                showBindCommanderDialog(card);
+            }
+        });
         findViewById(R.id.ar_tax_minus).setOnClickListener(v -> adjustCommanderCasts(-1));
         findViewById(R.id.ar_tax_plus).setOnClickListener(v -> adjustCommanderCasts(1));
         findViewById(R.id.ar_life_minus).setOnClickListener(v -> adjustGameLife(-1));
@@ -1326,11 +1356,13 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     private void refreshCounterUi() {
         if (game != null) {
             // The panel follows the focused target: a player (via commander or token) gets the
-            // life/tax rows, a scanned table card gets the normal counter controls.
+            // life/tax rows, a scanned table card gets the normal counter controls plus the
+            // option to become someone's commander.
             boolean gameTarget = focusedPlayerId >= 0;
             lifeRow.setVisibility(gameTarget ? View.VISIBLE : View.GONE);
             statRow.setVisibility(gameTarget ? View.GONE : View.VISIBLE);
             keywordButton.setVisibility(gameTarget ? View.GONE : View.VISIBLE);
+            setCommanderButton.setVisibility(gameTarget ? View.GONE : View.VISIBLE);
             if (gameTarget) {
                 refreshGameUi();
                 return;
@@ -1371,6 +1403,53 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         if (card != null) {
             pushCounterChips(card);
         }
+    }
+
+    /** Picks which player the focused scanned card belongs to as their commander. */
+    private void showBindCommanderDialog(ActiveCard card) {
+        List<GamePlayer> players = game.players();
+        String[] names = new String[players.size()];
+        for (int i = 0; i < players.size(); i++) {
+            names[i] = players.get(i).name;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(getString(R.string.ar_bind_commander_title, card.name))
+                .setItems(names, (dialog, which) -> bindCommander(card, players.get(which)))
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    /**
+     * Binds a scanned table card to a player as their commander, whenever the user wants —
+     * commanders no longer have to be chosen before the game reaches AR. The card's badge
+     * becomes the player's (life, tax, reminders), the player's life token takes its art, and
+     * any earlier binding for that player reverts to a plain counter-carrying table card.
+     * Session-local: the web merges back only life and casts, so the game model is untouched.
+     */
+    private void bindCommander(ActiveCard card, GamePlayer player) {
+        for (Map.Entry<String, GamePlayer> entry : playersByCardKey.entrySet()) {
+            if (entry.getValue() == player && !entry.getKey().equals(card.key)) {
+                playersByCardKey.remove(entry.getKey());
+                ActiveCard previous = cardsByKey.get(entry.getKey());
+                if (previous != null) {
+                    pushCounterChips(previous);
+                }
+            }
+        }
+        playersByCardKey.put(card.key, player);
+        focusedPlayerId = player.id;
+        overlay.setFocusedToken(player.id);
+
+        Bitmap art = referenceBitmaps.get(card.printingId);
+        if (art == null) {
+            art = referenceBitmaps.get(card.key);
+        }
+        overlay.upsertToken(player.id, tokenName(player), art, player.life,
+                player.commanderTax());
+        pushGameChips(card, player);
+        refreshCounterUi();
+        refreshCardList();
+        updateStatusLine();
     }
 
     /**

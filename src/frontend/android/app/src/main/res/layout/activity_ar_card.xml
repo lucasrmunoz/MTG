@@ -203,6 +203,15 @@
                 android:textAllCaps="false"
                 android:text="@string/ar_keyword_button" />
 
+            <!-- Game mode, scanned card focused: bind it to a player as their commander. -->
+            <Button
+                android:id="@+id/ar_set_commander"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textAllCaps="false"
+                android:text="@string/ar_set_commander"
+                android:visibility="gone" />
+
             <View
                 android:layout_width="0dp"
                 android:layout_height="0dp"

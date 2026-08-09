@@ -165,8 +165,12 @@ public final class CardOverlayView extends View {
 
     /** The grey card-aspect outline of guide-box scanning; null when ambient scanning. */
     private volatile float[] guideBox;
+    /** While now is before this, the outline draws green: card text is being read in the box. */
+    private volatile long guideActiveUntilMs;
+    private static final long GUIDE_ACTIVE_TTL_MS = 900;
     private final RectF guideRect = new RectF();
     private final Paint guidePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint guideActivePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
     /** Card quads the scanner spotted this pass; stale ones stop drawing, not linger. */
     private volatile List<float[]> scanQuads = Collections.emptyList();
@@ -214,6 +218,9 @@ public final class CardOverlayView extends View {
         guidePaint.setStyle(Paint.Style.STROKE);
         guidePaint.setStrokeWidth(dp(2.5f));
         guidePaint.setColor(Color.argb(220, 189, 195, 199));
+        guideActivePaint.setStyle(Paint.Style.STROKE);
+        guideActivePaint.setStrokeWidth(dp(3f));
+        guideActivePaint.setColor(Color.argb(220, 46, 204, 113));
         shadowFill.setStyle(Paint.Style.FILL);
         shadowFill.setColor(Color.argb(80, 0, 0, 0));
         altitudePaint.setStyle(Paint.Style.STROKE);
@@ -325,6 +332,13 @@ public final class CardOverlayView extends View {
     /** Shows the grey guide outline at these view coords {l, t, r, b}; null hides it. */
     void setGuideBox(float[] box) {
         guideBox = box;
+        guideActiveUntilMs = 0;
+        postInvalidate();
+    }
+
+    /** Card text was just read inside the outline — draw it green for a beat, Mythic-style. */
+    void markGuideBoxActive() {
+        guideActiveUntilMs = SystemClock.elapsedRealtime() + GUIDE_ACTIVE_TTL_MS;
         postInvalidate();
     }
 
@@ -460,7 +474,9 @@ public final class CardOverlayView extends View {
         float[] guide = guideBox;
         if (guide != null) {
             guideRect.set(guide[0], guide[1], guide[2], guide[3]);
-            canvas.drawRoundRect(guideRect, dp(12), dp(12), guidePaint);
+            boolean active = SystemClock.elapsedRealtime() < guideActiveUntilMs;
+            canvas.drawRoundRect(guideRect, dp(12), dp(12),
+                    active ? guideActivePaint : guidePaint);
         }
         if (SystemClock.elapsedRealtime() - scanQuadsAtMs <= SCAN_REGION_TTL_MS) {
             for (float[] quad : scanQuads) {

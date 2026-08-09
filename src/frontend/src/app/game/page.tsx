@@ -165,9 +165,6 @@ export default function GamePage() {
   }
 
   const pickerPlayer = game.players.find((player) => player.id === pickerFor) ?? null;
-  const hasTrackableCommander = game.players.some(
-    (player) => player.commander !== null && player.commander.imageUrl !== null,
-  );
 
   return (
     <div className="flex h-dvh flex-col gap-2 overflow-hidden bg-background p-2">
@@ -184,7 +181,7 @@ export default function GamePage() {
           Turn {game.turn}
         </span>
         <span className="min-w-0 flex-1" />
-        {cardAr !== null && hasTrackableCommander && (
+        {cardAr !== null && (
           <button
             type="button"
             onClick={() => void handleOpenAr()}

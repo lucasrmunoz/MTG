@@ -39,7 +39,7 @@
     <string name="ar_rescan">Rescan</string>
     <string name="ar_guide">⌖ Scan card</string>
     <string name="ar_guide_active">✕ Outline</string>
-    <string name="ar_status_guide">Fit one card in the outline, title at the top — it joins once recognised</string>
+    <string name="ar_status_guide">Fit one card in the outline — green means it\'s being read</string>
     <string name="ar_guide_confirmed">✓ %1$s</string>
     <string name="ar_capture">⏺ Corpus</string>
     <string name="ar_capture_recording">⏹ %1$d</string>
@@ -49,6 +49,8 @@
     <string name="ar_token_place_failed">No surface found there — the token went back to its tray.</string>
     <string name="ar_no_definition">This mechanic isn\'t in the glossary yet.</string>
     <string name="ar_remove_one">Remove one</string>
+    <string name="ar_set_commander">Commander…</string>
+    <string name="ar_bind_commander_title">Whose commander is %1$s?</string>
     <string name="ar_hint">Tap a keyword for its meaning · ✕ chips remove on tap · tap the card to place/float · pinch to zoom</string>
 
     <string-array name="ar_keyword_presets">

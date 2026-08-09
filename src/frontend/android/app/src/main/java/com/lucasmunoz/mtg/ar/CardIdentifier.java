@@ -53,16 +53,17 @@ final class CardIdentifier {
     /** How often to OCR a frame; more brings no benefit at hand-held steadiness. */
     private static final long ATTEMPT_INTERVAL_MS = 700;
 
+    /** Guide mode polls near back-to-back: the user is actively holding a card to be read. */
+    private static final long GUIDE_ATTEMPT_INTERVAL_MS = 350;
+
     /**
      * The camera sensor is landscape while the activity is locked to portrait, so frames reach
      * ML Kit rotated by 90 degrees. The corpus recorder stamps the same value into saved frames.
      */
     static final int ROTATION_DEGREES = 90;
 
-    /** The aimed card's title bar sits in the guide box's top; generous for imperfect aim. */
-    private static final float TITLE_BAND_FRAC = 0.35f;
-    /** The collector line hugs the aimed card's bottom edge. */
-    private static final float COLLECTOR_BAND_FRAC = 0.65f;
+    /** Reads reach this far beyond the outline, forgiving a card that overflows it. */
+    private static final float GUIDE_MARGIN_FRAC = 0.10f;
 
     private final TextRecognizer recognizer =
             TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
@@ -139,7 +140,8 @@ final class CardIdentifier {
     /** Called from the GL thread once per rendered frame; does nothing most of the time. */
     void maybeIdentify(Frame frame) {
         long now = SystemClock.elapsedRealtime();
-        if (recognizing || now - lastAttemptMs < ATTEMPT_INTERVAL_MS) {
+        long interval = guideBox != null ? GUIDE_ATTEMPT_INTERVAL_MS : ATTEMPT_INTERVAL_MS;
+        if (recognizing || now - lastAttemptMs < interval) {
             return;
         }
 
@@ -225,35 +227,49 @@ final class CardIdentifier {
     }
 
     /**
-     * Guide-box reading: only lines inside the box count, banded by where they sit on the aimed
-     * card — titles in the top band, collector data in the bottom band, the rules text between
-     * them ignored. Line-level rather than block-first, because a block can start outside the
-     * box or lump the title with the mana cost.
+     * Guide-box reading: every line inside the outline (plus a little margin) is tried as both
+     * a title and a collector line — the box already confines reads to one aimed card, so the
+     * whole card is searched without the frame-wide hazards. Line-level rather than
+     * block-first, because a block can start outside the box or lump the title with the mana
+     * cost. Rules-text lines that pass the title filter die in Scryfall's fuzzy 404s, and the
+     * title cross-check guards the printing.
      */
     private void readGuidedBlock(Text.TextBlock block, int imageWidth, int imageHeight,
             float[] cornerViews, float[] guide,
             List<float[]> outlines, List<String> numbers, List<String> setCodes) {
+        float marginX = (guide[2] - guide[0]) * GUIDE_MARGIN_FRAC;
+        float marginY = (guide[3] - guide[1]) * GUIDE_MARGIN_FRAC;
+        float[] reach = {
+                guide[0] - marginX, guide[1] - marginY, guide[2] + marginX, guide[3] + marginY,
+        };
         for (Text.Line line : block.getLines()) {
             Rect box = line.getBoundingBox();
             if (box == null) {
                 continue;
             }
             float[] viewQuad = viewQuadFor(box, imageWidth, imageHeight, cornerViews);
-            if (ScanGeometry.centerInBand(viewQuad, guide, 0f, TITLE_BAND_FRAC)) {
-                String title = TitleHeuristics.clean(line.getText());
-                if (title != null) {
-                    outlines.add(viewQuad);
-                    scheduleTitleLookup(title, true);
-                }
-            } else if (ScanGeometry.centerInBand(viewQuad, guide, COLLECTOR_BAND_FRAC, 1f)) {
-                String number = SetLineHeuristics.parseNumber(line.getText());
-                if (number != null && !numbers.contains(number)) {
-                    numbers.add(number);
-                }
-                String setCode = SetLineHeuristics.parseSetCode(line.getText());
-                if (setCode != null && !setCodes.contains(setCode)) {
-                    setCodes.add(setCode);
-                }
+            if (!ScanGeometry.centerInBand(viewQuad, reach, 0f, 1f)) {
+                continue;
+            }
+            boolean read = false;
+            String title = TitleHeuristics.clean(line.getText());
+            if (title != null) {
+                read = true;
+                scheduleTitleLookup(title, true);
+            }
+            String number = SetLineHeuristics.parseNumber(line.getText());
+            if (number != null && !numbers.contains(number)) {
+                read = true;
+                numbers.add(number);
+            }
+            String setCode = SetLineHeuristics.parseSetCode(line.getText());
+            if (setCode != null && !setCodes.contains(setCode)) {
+                read = true;
+                setCodes.add(setCode);
+            }
+            if (read) {
+                // Anything usable lights the outline green via the scan-activity callback.
+                outlines.add(viewQuad);
             }
         }
     }
