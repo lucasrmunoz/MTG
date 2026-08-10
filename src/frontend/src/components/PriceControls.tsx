@@ -38,8 +38,8 @@ export function PriceControls({
   const compact = size === "compact";
   // min-w-0 lets the select shrink below the width of its longest option; without it the row has a
   // ~415px intrinsic minimum, which forces phones to shrink-to-fit the whole page.
-  const selectClass = `min-w-0 flex-1 sm:flex-none bg-background border border-orange/30 rounded text-foreground focus:outline-none focus:border-orange transition-colors cursor-pointer ${
-    compact ? "px-2 py-1 text-xs" : "px-3 py-2 text-sm"
+  const selectClass = `field min-w-0 flex-1 sm:flex-none ${
+    compact ? "px-2 py-1 text-xs" : ""
   }`;
   const labelClass = `flex-shrink-0 text-orange font-semibold uppercase tracking-wide ${
     compact ? "text-[10px]" : "text-xs"
@@ -96,7 +96,7 @@ export function PriceControls({
         <span
           className={`flex items-center gap-2 text-foreground/50 ${compact ? "text-[10px]" : "text-xs"}`}
         >
-          <span className="inline-block h-3 w-3 border-2 border-foreground/40 border-t-transparent rounded-full animate-spin" />
+          <span className="spinner h-3 w-3 text-foreground/40" />
           Loading prices…
         </span>
       ) : (
@@ -123,9 +123,7 @@ export function PriceControls({
           onClick={onRefresh}
           disabled={refreshing === true}
           title="Download this vendor's price catalogue again now, replacing the cached copy"
-          className={`bg-background border border-orange/30 hover:border-orange disabled:opacity-60 text-foreground rounded transition-colors cursor-pointer ${
-            compact ? "px-2 py-1 text-[10px]" : "px-3 py-1.5 text-xs"
-          }`}
+          className={`btn btn-ghost ${compact ? "px-2 py-1 text-[10px]" : "btn-xs"}`}
         >
           {refreshing === true ? "Refreshing…" : "↻ Refresh"}
         </button>

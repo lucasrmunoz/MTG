@@ -26,10 +26,8 @@ export function GameSetup({ onStart }: GameSetupProps) {
   const [layout, setLayout] = useState<GameLayout>("grid");
 
   return (
-    <div className="bg-surface rounded-lg border border-purple/30 p-4 sm:p-6 max-w-md mx-auto">
-      <h2 className="text-orange font-semibold text-sm uppercase tracking-wide mb-4">
-        New Game
-      </h2>
+    <div className="panel rise p-4 sm:p-6 max-w-md mx-auto">
+      <h2 className="section-title mb-4">New Game</h2>
 
       <p className="text-purple-light text-sm mb-2">Players</p>
       <div className="flex gap-2 mb-5">
@@ -39,11 +37,7 @@ export function GameSetup({ onStart }: GameSetupProps) {
             type="button"
             onClick={() => setPlayerCount(count)}
             aria-pressed={count === playerCount}
-            className={`flex-1 rounded border px-0 py-2 font-semibold transition-colors cursor-pointer ${
-              count === playerCount
-                ? "bg-orange text-background border-orange"
-                : "bg-background border-purple/40 hover:border-purple text-foreground"
-            }`}
+            className={`btn flex-1 px-0 ${count === playerCount ? "btn-primary" : "btn-ghost"}`}
           >
             {count}
           </button>
@@ -58,11 +52,7 @@ export function GameSetup({ onStart }: GameSetupProps) {
             type="button"
             onClick={() => setStartingLife(preset)}
             aria-pressed={preset === startingLife}
-            className={`rounded border px-4 py-2 font-semibold transition-colors cursor-pointer ${
-              preset === startingLife
-                ? "bg-orange text-background border-orange"
-                : "bg-background border-purple/40 hover:border-purple text-foreground"
-            }`}
+            className={`btn ${preset === startingLife ? "btn-primary" : "btn-ghost"}`}
           >
             {preset}
           </button>
@@ -77,7 +67,7 @@ export function GameSetup({ onStart }: GameSetupProps) {
             }
           }}
           aria-label="Custom starting life"
-          className="min-w-0 flex-1 bg-background border border-orange/30 rounded px-3 py-2 text-foreground focus:outline-none focus:border-orange transition-colors"
+          className="field min-w-0 flex-1"
         />
       </div>
 
@@ -100,7 +90,7 @@ export function GameSetup({ onStart }: GameSetupProps) {
       <button
         type="button"
         onClick={() => onStart(playerCount, startingLife, layout)}
-        className="w-full bg-orange hover:bg-orange-hover text-background font-semibold px-4 py-3 rounded transition-colors cursor-pointer"
+        className="btn btn-primary w-full py-3 text-base"
       >
         Start game
       </button>
@@ -124,10 +114,10 @@ function LayoutOption({
       type="button"
       onClick={onSelect}
       aria-pressed={selected}
-      className={`rounded border px-4 py-2 text-left transition-colors cursor-pointer ${
+      className={`rounded-[0.625rem] border px-4 py-2 text-left transition-all duration-150 cursor-pointer ${
         selected
-          ? "border-orange bg-background"
-          : "border-purple/40 bg-background/50 hover:border-purple"
+          ? "border-orange bg-orange/10 shadow-[0_0_0_1px_var(--orange)]"
+          : "border-purple/40 bg-background-deep/40 hover:border-purple-light hover:bg-surface-raised"
       }`}
     >
       <span className={`block font-semibold ${selected ? "text-orange" : "text-foreground"}`}>

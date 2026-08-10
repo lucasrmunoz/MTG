@@ -34,7 +34,7 @@ export function KeywordChip({ keyword }: { keyword: string }) {
         type="button"
         onClick={() => setOpen((current) => !current)}
         aria-expanded={open}
-        className="bg-background border border-purple/40 hover:border-purple text-foreground px-2.5 py-1 rounded-full text-sm transition-colors cursor-pointer"
+        className="chip px-2.5 py-1 text-sm"
       >
         {keyword}
       </button>
@@ -49,7 +49,7 @@ export function KeywordChip({ keyword }: { keyword: string }) {
           />
           <span
             role="tooltip"
-            className="absolute left-0 top-full z-20 mt-2 w-72 max-w-[80vw] rounded-lg border border-purple/50 bg-background p-3 shadow-lg shadow-black/40"
+            className="rise absolute left-0 top-full z-20 mt-2 w-72 max-w-[80vw] rounded-xl border border-purple/50 bg-surface p-3 shadow-xl shadow-black/50"
           >
             <span className="block text-purple-light font-bold mb-1">
               {entry?.name ?? keyword}

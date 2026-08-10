@@ -41,7 +41,7 @@ export function ArtVersionGrid({
   return (
     <div className="mt-6 pt-6 border-t border-purple/20">
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-        <h3 className="text-orange font-semibold text-sm uppercase tracking-wide">
+        <h3 className="section-title">
           Art Versions ({filtered ? `${versions.length} of ${totalCount}` : versions.length})
         </h3>
         <PriceControls
@@ -56,7 +56,7 @@ export function ArtVersionGrid({
 
       {loading ? (
         <div className="flex items-center gap-2 text-foreground/60">
-          <span className="inline-block h-4 w-4 border-2 border-foreground/40 border-t-transparent rounded-full animate-spin" />
+          <span className="spinner text-foreground/40" />
           Loading art versions...
         </div>
       ) : versions.length === 0 ? (
@@ -72,11 +72,8 @@ export function ArtVersionGrid({
               onClick={() => onSelect(art.imageUrl)}
               onMouseEnter={() => onHover(art.imageUrl)}
               onMouseLeave={() => onHover(null)}
-              className={`rounded-lg border-2 p-2 transition-all cursor-pointer hover:border-orange ${
-                selectedUrl === art.imageUrl
-                  ? "border-orange bg-orange/10"
-                  : "border-foreground/10 hover:bg-surface"
-              }`}
+              aria-pressed={selectedUrl === art.imageUrl}
+              className={`tile p-2 ${selectedUrl === art.imageUrl ? "tile-selected" : ""}`}
             >
               <Image
                 src={art.artCropUrl ?? art.imageUrl}

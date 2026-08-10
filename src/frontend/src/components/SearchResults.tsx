@@ -34,8 +34,8 @@ export function SearchResults({
   const truncated = totalMatches > cards.length;
 
   return (
-    <div className="bg-surface rounded-lg border border-purple/30 p-4 sm:p-6 mb-6 sm:mb-8">
-      <h2 className="text-orange font-semibold text-sm uppercase tracking-wide mb-1">
+    <div className="panel rise p-4 sm:p-6 mb-6 sm:mb-8">
+      <h2 className="section-title mb-1">
         Matches (
         {truncated
           ? `${cards.length} of ${totalMatches.toLocaleString("en-US")}`
@@ -57,7 +57,7 @@ export function SearchResults({
               key={card.id}
               type="button"
               onClick={() => onSelect(card)}
-              className="rounded-lg border-2 border-foreground/10 p-2 text-left transition-all cursor-pointer hover:border-orange hover:bg-background/60"
+              className="tile p-2 text-left"
             >
               {card.imageUrl === null ? (
                 <div className="aspect-[488/680] w-full bg-background/50 rounded flex items-center justify-center p-2">

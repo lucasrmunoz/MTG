@@ -32,10 +32,8 @@ export function PreviewPanel({
   const vendor = vendors.find((candidate) => candidate.id === vendorId);
 
   return (
-    <div className="bg-surface rounded-lg border border-purple/30 p-4 sticky top-8">
-      <h2 className="text-orange font-semibold text-sm uppercase tracking-wide mb-4">
-        Preview
-      </h2>
+    <div className="panel p-4 sticky top-8">
+      <h2 className="section-title mb-4">Preview</h2>
 
       {imageUrl === null ? (
         <p className="text-foreground/40 text-sm text-center py-8">
@@ -60,7 +58,7 @@ export function PreviewPanel({
             width={288}
             height={401}
             foil={finish === "foil"}
-            className="rounded-lg w-full h-auto"
+            className="rounded-lg w-full h-auto shadow-[0_12px_32px_-12px_rgba(0,0,0,0.7)]"
           />
 
           {vendor !== undefined && (

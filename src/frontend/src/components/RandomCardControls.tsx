@@ -23,10 +23,8 @@ export function RandomCardControls({ loading, onRandom }: RandomCardControlsProp
   }
 
   return (
-    <div className="bg-surface rounded-lg border border-purple/30 p-4 sm:p-6 mb-6 sm:mb-8">
-      <h2 className="text-orange font-semibold text-sm uppercase tracking-wide mb-3">
-        Random Card
-      </h2>
+    <div className="panel p-4 sm:p-6 mb-6 sm:mb-8">
+      <h2 className="section-title mb-3">Random Card</h2>
 
       <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
         <div className="flex flex-wrap gap-2" role="group" aria-label="Color filter">
@@ -38,11 +36,7 @@ export function RandomCardControls({ loading, onRandom }: RandomCardControlsProp
                 type="button"
                 aria-pressed={active}
                 onClick={() => toggleColor(color.id)}
-                className={`px-3 py-1.5 rounded text-sm font-semibold border transition-colors cursor-pointer ${
-                  active
-                    ? "bg-orange border-orange text-background"
-                    : "bg-background border-orange/30 text-foreground hover:border-orange"
-                }`}
+                className={`btn btn-sm ${active ? "btn-primary" : "btn-ghost"}`}
               >
                 {color.label}
               </button>
@@ -55,7 +49,7 @@ export function RandomCardControls({ loading, onRandom }: RandomCardControlsProp
           onChange={(event) => setMode(event.target.value as ColorMatchMode)}
           disabled={selected.length === 0}
           aria-label="Color match mode"
-          className="min-w-0 bg-background border border-orange/30 rounded px-3 py-2 text-sm text-foreground focus:outline-none focus:border-orange transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          className="field min-w-0"
         >
           {COLOR_MATCH_MODES.map((option) => (
             <option key={option.id} value={option.id}>
@@ -68,13 +62,13 @@ export function RandomCardControls({ loading, onRandom }: RandomCardControlsProp
           type="button"
           disabled={loading}
           onClick={() => onRandom(selected, mode)}
-          className="bg-purple hover:bg-purple-light text-background font-semibold px-4 sm:px-6 py-2 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+          className="btn btn-violet px-4 sm:px-6"
         >
           {loading ? (
-            <span className="flex items-center gap-2">
-              <span className="inline-block h-4 w-4 border-2 border-background border-t-transparent rounded-full animate-spin" />
+            <>
+              <span className="spinner" />
               Drawing...
-            </span>
+            </>
           ) : (
             "Surprise Me"
           )}

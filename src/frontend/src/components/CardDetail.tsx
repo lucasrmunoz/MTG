@@ -18,7 +18,7 @@ interface CardDetailProps {
 function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <span className="text-orange font-semibold text-sm uppercase tracking-wide">
+      <span className="text-orange/90 font-semibold text-xs uppercase tracking-wider">
         {label}
       </span>
       <div className="text-foreground mt-1">{children}</div>
@@ -52,13 +52,13 @@ export function CardDetail({
             width={300}
             height={418}
             foil={showFoil}
-            className="rounded-lg w-full h-auto"
+            className="rounded-lg w-full h-auto shadow-[0_12px_32px_-12px_rgba(0,0,0,0.7)]"
           />
         )}
       </div>
 
       <div className="flex-1 space-y-4">
-        <h3 className="text-2xl font-bold text-purple-light">{card.name}</h3>
+        <h3 className="font-display text-2xl font-bold text-purple-light">{card.name}</h3>
 
         <div className="space-y-3">
           <DetailRow label="Type">{card.typeLine}</DetailRow>

@@ -106,27 +106,21 @@ export function CommanderPicker({ player, onPick, onClose }: CommanderPickerProp
   }
 
   return (
-    <div className="fixed inset-0 z-40 overflow-y-auto bg-background p-4 sm:p-6">
-      <div className="mx-auto max-w-3xl">
+    <div className="fixed inset-0 z-40 overflow-y-auto bg-background-deep/95 backdrop-blur-sm p-4 sm:p-6">
+      <div className="mx-auto max-w-3xl rise">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-orange font-semibold text-sm uppercase tracking-wide">
-            Commander for {player.name}
-          </h2>
+          <h2 className="section-title">Commander for {player.name}</h2>
           <div className="flex gap-2">
             {player.commander !== null && (
               <button
                 type="button"
                 onClick={() => onPick(null)}
-                className="rounded border border-red-deck/50 bg-surface px-3 py-1.5 text-sm font-semibold text-red-deck hover:border-red-deck transition-colors cursor-pointer"
+                className="btn btn-danger btn-sm"
               >
                 Remove commander
               </button>
             )}
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded border border-purple/40 bg-surface px-3 py-1.5 text-sm font-semibold text-foreground hover:border-purple transition-colors cursor-pointer"
-            >
+            <button type="button" onClick={onClose} className="btn btn-ghost btn-sm">
               Close
             </button>
           </div>
@@ -140,13 +134,11 @@ export function CommanderPicker({ player, onPick, onClose }: CommanderPickerProp
         />
 
         {error !== null && (
-          <div className="mb-6 rounded-lg border border-red-deck/50 bg-red-deck/20 p-4 text-red-deck">
-            {error}
-          </div>
+          <div className="banner-error mb-6 p-4">{error}</div>
         )}
 
         {searchedTerm !== null && results?.cards.length === 0 && (
-          <div className="mb-6 rounded-lg border border-purple/30 bg-surface p-4 text-foreground/60">
+          <div className="panel mb-6 p-4 text-foreground/60">
             No card name contains &ldquo;{searchedTerm}&rdquo;. Check the spelling, or try a
             shorter piece of the name.
           </div>

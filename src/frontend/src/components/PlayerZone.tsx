@@ -128,8 +128,10 @@ export function PlayerZone({
           />
         ) : (
           <div
-            className={`relative h-full w-full overflow-hidden rounded-xl border bg-surface select-none ${
-              isActive ? "border-orange" : "border-purple/30"
+            className={`relative h-full w-full overflow-hidden rounded-xl border bg-gradient-to-b from-surface-raised to-surface select-none transition-shadow duration-150 ${
+              isActive
+                ? "border-orange shadow-[0_0_0_1px_var(--orange),0_0_22px_-6px_rgba(230,126,34,0.6)]"
+                : "border-purple/30"
             }`}
             onContextMenu={(event) => event.preventDefault()}
           >
@@ -162,7 +164,7 @@ export function PlayerZone({
             />
 
             <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center">
-              <span className="text-5xl sm:text-6xl font-bold text-foreground drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
+              <span className="font-display text-5xl sm:text-6xl font-bold text-foreground drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
                 {player.life}
               </span>
               <span
@@ -185,7 +187,7 @@ export function PlayerZone({
               <button
                 type="button"
                 onClick={() => setMenuOpen(true)}
-                className="max-w-[90%] truncate rounded-full border border-purple/40 bg-background/80 px-3 py-1 text-sm text-foreground hover:border-purple transition-colors cursor-pointer"
+                className="chip max-w-[90%] truncate px-3 py-1 text-sm backdrop-blur-sm bg-background-deep/70"
               >
                 {player.name}
                 {player.commanderCasts > 0 && (
@@ -204,14 +206,14 @@ export function PlayerZone({
                         type="button"
                         onClick={() => onDismissReminder(reminder.id)}
                         title="Tap when done"
-                        className="pointer-events-auto max-w-full truncate rounded-full bg-orange px-2 py-0.5 text-xs font-semibold text-background cursor-pointer"
+                        className="pointer-events-auto max-w-full truncate rounded-full bg-gradient-to-b from-orange-hover to-orange px-2 py-0.5 text-xs font-semibold text-background-deep shadow-[0_2px_8px_-2px_rgba(230,126,34,0.7)] cursor-pointer"
                       >
                         {reminderLabel(reminder)}
                       </button>
                     ) : (
                       <span
                         key={reminder.id}
-                        className="max-w-full truncate rounded-full border border-purple/40 bg-background/80 px-2 py-0.5 text-xs text-foreground/70"
+                        className="max-w-full truncate rounded-full border border-purple/40 bg-background-deep/70 backdrop-blur-sm px-2 py-0.5 text-xs text-foreground/70"
                       >
                         {reminderLabel(reminder)}
                       </span>
@@ -223,7 +225,7 @@ export function PlayerZone({
                 <button
                   type="button"
                   onClick={onEndTurn}
-                  className="pointer-events-auto rounded-full border border-orange/60 bg-background/80 px-3 py-1 text-sm font-semibold text-orange hover:bg-orange hover:text-background transition-colors cursor-pointer"
+                  className="pointer-events-auto rounded-full border border-orange/60 bg-background-deep/80 backdrop-blur-sm px-3 py-1 text-sm font-semibold text-orange hover:bg-orange hover:text-background-deep transition-colors duration-150 cursor-pointer"
                 >
                   End turn
                 </button>
@@ -314,20 +316,20 @@ function ZoneMenu({
   }, [onClose]);
 
   return (
-    <div className="flex h-full w-full flex-col gap-2 overflow-y-auto rounded-xl border border-orange/40 bg-background/95 p-3">
+    <div className="flex h-full w-full flex-col gap-2 overflow-y-auto rounded-xl border border-orange/40 bg-background/95 backdrop-blur-sm p-3">
       <div className="flex items-center gap-2">
         <input
           type="text"
           value={player.name}
           onChange={(event) => onRename(event.target.value)}
           aria-label="Player name"
-          className="min-w-0 flex-1 rounded border border-orange/30 bg-surface px-2 py-1 text-sm text-foreground focus:outline-none focus:border-orange transition-colors"
+          className="field min-w-0 flex-1 px-2 py-1"
         />
         <button
           type="button"
           onClick={onClose}
           aria-label="Close player settings"
-          className="rounded border border-purple/40 bg-surface px-2 py-1 text-sm text-foreground hover:border-purple transition-colors cursor-pointer"
+          className="btn btn-ghost btn-xs py-1"
         >
           ✕
         </button>
@@ -337,11 +339,7 @@ function ZoneMenu({
         <span className="truncate text-foreground/80">
           {player.commander?.name ?? "No commander"}
         </span>
-        <button
-          type="button"
-          onClick={onPickCommander}
-          className="rounded border border-purple/40 bg-surface px-2 py-1 text-foreground hover:border-purple transition-colors cursor-pointer"
-        >
+        <button type="button" onClick={onPickCommander} className="btn btn-ghost btn-xs">
           {player.commander === null ? "Set commander" : "Change"}
         </button>
       </div>
@@ -356,7 +354,7 @@ function ZoneMenu({
             type="button"
             onClick={() => onAdjustCasts(-1)}
             aria-label="One fewer commander cast"
-            className="rounded border border-purple/40 bg-surface px-2.5 py-0.5 text-foreground hover:border-purple transition-colors cursor-pointer"
+            className="btn btn-ghost btn-xs px-2.5 py-0.5"
           >
             −
           </button>
@@ -364,7 +362,7 @@ function ZoneMenu({
             type="button"
             onClick={() => onAdjustCasts(1)}
             aria-label="One more commander cast"
-            className="rounded border border-purple/40 bg-surface px-2.5 py-0.5 text-foreground hover:border-purple transition-colors cursor-pointer"
+            className="btn btn-ghost btn-xs px-2.5 py-0.5"
           >
             +
           </button>
@@ -375,11 +373,7 @@ function ZoneMenu({
         {isActive ? (
           <span className="text-orange font-semibold">Taking their turn</span>
         ) : (
-          <button
-            type="button"
-            onClick={onSetActive}
-            className="rounded border border-purple/40 bg-surface px-2 py-1 text-foreground hover:border-purple transition-colors cursor-pointer"
-          >
+          <button type="button" onClick={onSetActive} className="btn btn-ghost btn-xs">
             It&apos;s their turn
           </button>
         )}
@@ -431,7 +425,7 @@ function ReminderEditor({
             type="button"
             onClick={() => onDismissReminder(reminder.id)}
             aria-label={`Remove reminder: ${reminderLabel(reminder)}`}
-            className="rounded border border-purple/40 bg-surface px-2 py-0.5 text-foreground hover:border-purple transition-colors cursor-pointer"
+            className="btn btn-ghost btn-xs px-2 py-0.5"
           >
             ✕
           </button>
@@ -442,7 +436,7 @@ function ReminderEditor({
           value={phase}
           onChange={(event) => setPhase(event.target.value as ReminderPhase)}
           aria-label="Reminder phase"
-          className="rounded border border-purple/40 bg-surface px-1.5 py-1 text-foreground focus:outline-none focus:border-purple transition-colors"
+          className="field py-1 pl-1.5"
         >
           {REMINDER_PHASES.map((option) => (
             <option key={option} value={option}>
@@ -461,12 +455,12 @@ function ReminderEditor({
           }}
           placeholder="Do what?"
           aria-label="Reminder text"
-          className="min-w-0 flex-1 rounded border border-purple/40 bg-surface px-2 py-1 text-foreground focus:outline-none focus:border-purple transition-colors"
+          className="field min-w-0 flex-1 px-2 py-1"
         />
         <button
           type="button"
           onClick={add}
-          className="rounded border border-orange/40 bg-surface px-2 py-1 text-orange hover:border-orange transition-colors cursor-pointer"
+          className="btn btn-xs border-orange/40 bg-transparent text-orange hover:border-orange"
         >
           Add
         </button>

@@ -19,25 +19,19 @@ export function KeywordsSection() {
   }
 
   return (
-    <div className="bg-surface rounded-lg border border-purple/30 p-4 sm:p-6">
+    <div className="panel p-4 sm:p-6">
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-        <h2 className="text-orange font-semibold text-sm uppercase tracking-wide">
-          Keyword Glossary
-        </h2>
+        <h2 className="section-title">Keyword Glossary</h2>
 
         <div className="flex flex-wrap gap-3">
-          <button
-            type="button"
-            onClick={pickRandom}
-            className="bg-purple hover:bg-purple-light text-background font-semibold px-4 py-2 rounded text-sm transition-colors cursor-pointer"
-          >
+          <button type="button" onClick={pickRandom} className="btn btn-violet">
             Random Keyword
           </button>
           <button
             type="button"
             onClick={() => setShowAll((current) => !current)}
             aria-expanded={showAll}
-            className="bg-background border border-orange/30 hover:border-orange text-foreground font-semibold px-4 py-2 rounded text-sm transition-colors cursor-pointer"
+            className="btn btn-ghost"
           >
             {showAll ? "Hide All Keywords" : `Show All Keywords (${KEYWORDS.length})`}
           </button>
@@ -52,8 +46,10 @@ export function KeywordsSection() {
       )}
 
       {spotlight !== null && (
-        <div className="bg-background rounded-lg border border-purple/40 p-4 mb-4">
-          <h3 className="text-purple-light font-bold text-lg mb-1">{spotlight.name}</h3>
+        <div className="rise rounded-xl border border-purple/40 bg-background-deep/60 p-4 mb-4">
+          <h3 className="font-display text-purple-light font-bold text-lg mb-1">
+            {spotlight.name}
+          </h3>
           <p className="text-foreground">{spotlight.definition}</p>
         </div>
       )}

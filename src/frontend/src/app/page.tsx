@@ -330,11 +330,11 @@ export default function Home() {
         : null;
 
   return (
-    <div className="min-h-screen bg-background p-4 sm:p-6 lg:p-8">
+    <div className="min-h-screen p-4 sm:p-6 lg:p-8">
       <div className="mx-auto max-w-7xl">
         <div className="flex flex-wrap items-start justify-between gap-4 mb-6 sm:mb-8">
           <div className="min-w-0">
-            <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-orange mb-1">
+            <h1 className="font-display text-2xl sm:text-3xl lg:text-4xl font-bold mb-1 bg-gradient-to-r from-orange-hover via-orange to-purple-light bg-clip-text text-transparent">
               MTG Card Lookup
             </h1>
             <p className="text-purple-light text-base sm:text-lg">
@@ -368,22 +368,17 @@ export default function Home() {
             />
 
             <div className="mb-6 sm:mb-8 flex flex-wrap gap-3">
-              <Link
-                href="/game"
-                className="bg-background border border-purple/40 hover:border-purple text-foreground font-semibold px-4 py-2 rounded text-sm transition-colors"
-              >
+              <Link href="/game" className="btn btn-ghost">
                 Commander game
               </Link>
             </div>
 
             {error !== null && (
-              <div className="bg-red-deck/20 border border-red-deck/50 text-red-deck rounded-lg p-4 mb-8">
-                {error}
-              </div>
+              <div className="banner-error p-4 mb-8">{error}</div>
             )}
 
             {searchedTerm !== null && results?.cards.length === 0 && (
-              <div className="bg-surface rounded-lg border border-purple/30 p-4 sm:p-6 mb-6 sm:mb-8 text-foreground/60">
+              <div className="panel rise p-4 sm:p-6 mb-6 sm:mb-8 text-foreground/60">
                 No card name contains &ldquo;{searchedTerm}&rdquo;. Check the spelling, or try a
                 shorter piece of the name.
               </div>
@@ -400,26 +395,20 @@ export default function Home() {
             )}
 
             {card !== null && (
-              <div className="bg-surface rounded-lg border border-purple/30 p-4 sm:p-6">
+              <div className="panel rise p-4 sm:p-6">
                 <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-                  <h2 className="text-orange font-semibold text-sm uppercase tracking-wide">
-                    Selected Card
-                  </h2>
+                  <h2 className="section-title">Selected Card</h2>
                   {cardAr !== null && card.imageUrl !== null && (
                     <button
                       type="button"
                       onClick={() => void handleViewInAr()}
-                      className="bg-background border border-purple/40 hover:border-purple text-foreground font-semibold px-4 py-2 rounded text-sm transition-colors cursor-pointer"
+                      className="btn btn-ghost"
                     >
                       View in AR
                     </button>
                   )}
                   {results !== null && results.cards.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={backToResults}
-                      className="bg-background border border-orange/30 hover:border-orange text-foreground font-semibold px-4 py-2 rounded text-sm transition-colors cursor-pointer"
-                    >
+                    <button type="button" onClick={backToResults} className="btn btn-ghost">
                       ← Back to matches ({results.cards.length})
                     </button>
                   )}

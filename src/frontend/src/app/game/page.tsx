@@ -143,14 +143,13 @@ export default function GamePage() {
 
   if (game === null) {
     return (
-      <div className="min-h-screen bg-background p-4 sm:p-6 lg:p-8">
+      <div className="min-h-screen p-4 sm:p-6 lg:p-8">
         <div className="mx-auto max-w-7xl">
           <div className="mb-6 flex items-center justify-between gap-4">
-            <h1 className="text-2xl sm:text-3xl font-bold text-orange">Commander Game</h1>
-            <Link
-              href="/"
-              className="rounded border border-purple/40 bg-surface px-3 py-1.5 text-sm font-semibold text-foreground hover:border-purple transition-colors"
-            >
+            <h1 className="font-display text-2xl sm:text-3xl font-bold bg-gradient-to-r from-orange-hover via-orange to-purple-light bg-clip-text text-transparent">
+              Commander Game
+            </h1>
+            <Link href="/" className="btn btn-ghost btn-sm">
               ← Card lookup
             </Link>
           </div>
@@ -167,17 +166,13 @@ export default function GamePage() {
   const pickerPlayer = game.players.find((player) => player.id === pickerFor) ?? null;
 
   return (
-    <div className="flex h-dvh flex-col gap-2 overflow-hidden bg-background p-2">
+    <div className="flex h-dvh flex-col gap-2 overflow-hidden p-2">
       <div className="flex shrink-0 flex-wrap items-center gap-2">
-        <Link
-          href="/"
-          aria-label="Back to card lookup"
-          className="rounded border border-purple/40 bg-surface px-2.5 py-1 text-sm font-semibold text-foreground hover:border-purple transition-colors"
-        >
+        <Link href="/" aria-label="Back to card lookup" className="btn btn-ghost btn-sm px-2.5">
           ←
         </Link>
         <LayoutToggle layout={game.layout} onChange={(next) => setGame(setLayout(game, next))} />
-        <span className="whitespace-nowrap text-sm font-semibold text-purple-light">
+        <span className="whitespace-nowrap font-display text-sm font-bold tracking-wider text-purple-light">
           Turn {game.turn}
         </span>
         <span className="min-w-0 flex-1" />
@@ -186,7 +181,7 @@ export default function GamePage() {
             type="button"
             onClick={() => void handleOpenAr()}
             disabled={arBusy}
-            className="rounded border border-purple/40 bg-surface px-2.5 py-1 text-sm font-semibold text-foreground hover:border-purple transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            className="btn btn-ghost btn-sm"
           >
             {arBusy ? "In AR…" : "View in AR"}
           </button>
@@ -194,20 +189,14 @@ export default function GamePage() {
         <button
           type="button"
           onClick={handleNewGame}
-          className={`rounded border px-2.5 py-1 text-sm font-semibold transition-colors cursor-pointer ${
-            confirmingReset
-              ? "border-red-deck bg-red-deck/20 text-red-deck"
-              : "border-purple/40 bg-surface text-foreground hover:border-purple"
-          }`}
+          className={`btn btn-sm ${confirmingReset ? "btn-danger" : "btn-ghost"}`}
         >
           {confirmingReset ? "Tap again to end" : "New game"}
         </button>
       </div>
 
       {error !== null && (
-        <div className="shrink-0 rounded border border-red-deck/50 bg-red-deck/20 px-3 py-1.5 text-sm text-red-deck">
-          {error}
-        </div>
+        <div className="banner-error shrink-0 px-3 py-1.5 text-sm">{error}</div>
       )}
 
       <div className="min-h-0 flex-1">
@@ -248,7 +237,7 @@ function LayoutToggle({
   onChange: (layout: GameLayout) => void;
 }) {
   return (
-    <div className="flex overflow-hidden rounded border border-purple/40">
+    <div className="flex overflow-hidden rounded-[0.625rem] border border-purple/40 bg-background-deep/60">
       {(
         [
           ["grid", "Grid"],
@@ -260,10 +249,10 @@ function LayoutToggle({
           type="button"
           onClick={() => onChange(value)}
           aria-pressed={layout === value}
-          className={`px-2.5 py-1 text-sm font-semibold transition-colors cursor-pointer ${
+          className={`px-2.5 py-1 text-sm font-semibold transition-colors duration-150 cursor-pointer ${
             layout === value
-              ? "bg-orange text-background"
-              : "bg-surface text-foreground hover:text-orange"
+              ? "bg-gradient-to-b from-orange-hover to-orange text-background-deep"
+              : "text-foreground hover:text-orange"
           }`}
         >
           {label}
