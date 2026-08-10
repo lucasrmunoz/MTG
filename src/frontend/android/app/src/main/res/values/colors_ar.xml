@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The AR screen's palette, mirroring the web app (src/frontend/src/app/globals.css). -->
+<resources>
+    <color name="ar_background">#1A1A2E</color>
+    <color name="ar_surface">#2D2D44</color>
+    <color name="ar_orange">#E67E22</color>
+    <color name="ar_purple">#9B59B6</color>
+    <color name="ar_foreground">#E0E0E0</color>
+    <color name="ar_text_dim">#99FFFFFF</color>
+    <!-- Purple at ~40% alpha: the web app's border-purple/40. -->
+    <color name="ar_purple_border">#669B59B6</color>
+    <!-- Chrome fills: translucent so the camera reads through, dark enough for contrast. -->
+    <color name="ar_panel_fill">#F2151528</color>
+    <color name="ar_pill_fill">#D92D2D44</color>
+    <color name="ar_chip_fill">#E61A1A2E</color>
+    <color name="ar_status_fill">#CC1A1A2E</color>
+    <color name="ar_ripple">#33FFFFFF</color>
+</resources>

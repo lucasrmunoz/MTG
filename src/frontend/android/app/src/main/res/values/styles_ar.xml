@@ -1,11 +1,55 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- The AR chrome's standard button: a bordered pill matching the web app's look. -->
+    <style name="ArPillButton" parent="Widget.AppCompat.Button.Borderless">
+        <item name="android:background">@drawable/ar_pill_button</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:textColor">@color/ar_foreground</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:minWidth">0dp</item>
+        <item name="android:minHeight">40dp</item>
+        <item name="android:paddingHorizontal">14dp</item>
+        <item name="android:paddingVertical">0dp</item>
+    </style>
+
+    <!-- Compact pill for card-list rows, where a 40dp button would dominate the row. -->
+    <style name="ArSmallPillButton" parent="ArPillButton">
+        <item name="android:minHeight">32dp</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:paddingHorizontal">12dp</item>
+    </style>
+
+    <!-- Round − / + steppers (and the ✕ close): big glyph, big touch target. -->
+    <style name="ArStepperButton" parent="Widget.AppCompat.Button.Borderless">
+        <item name="android:background">@drawable/ar_circle_button</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:textColor">@color/ar_orange</item>
+        <item name="android:textSize">20sp</item>
+        <item name="android:minWidth">44dp</item>
+        <item name="android:minHeight">44dp</item>
+        <item name="android:layout_width">44dp</item>
+        <item name="android:layout_height">44dp</item>
+        <item name="android:padding">0dp</item>
+    </style>
+
     <!-- Equal-width row of stat-counter buttons; textAllCaps would mangle "+1/+1". -->
-    <style name="ArStatButton">
+    <style name="ArStatButton" parent="ArPillButton">
         <item name="android:layout_width">0dp</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:layout_weight">1</item>
-        <item name="android:minWidth">0dp</item>
+        <item name="android:layout_marginHorizontal">2dp</item>
+        <item name="android:paddingHorizontal">4dp</item>
+    </style>
+
+    <!-- Counter chips built in code (defStyleRes in ArCardActivity.addChip). -->
+    <style name="ArChip" parent="Widget.AppCompat.Button.Borderless">
+        <item name="android:background">@drawable/ar_chip_button</item>
         <item name="android:textAllCaps">false</item>
+        <item name="android:textColor">@color/ar_foreground</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:minWidth">0dp</item>
+        <item name="android:minHeight">32dp</item>
+        <item name="android:paddingHorizontal">12dp</item>
+        <item name="android:paddingVertical">0dp</item>
     </style>
 </resources>

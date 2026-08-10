@@ -20,19 +20,21 @@
         android:layout_height="wrap_content"
         android:layout_gravity="top|center_horizontal"
         android:layout_marginTop="48dp"
-        android:layout_marginHorizontal="56dp"
-        android:background="#CC1A1A2E"
-        android:padding="10dp"
-        android:textColor="#FFFFFF"
+        android:layout_marginHorizontal="64dp"
+        android:background="@drawable/ar_status_bg"
+        android:paddingHorizontal="16dp"
+        android:paddingVertical="10dp"
+        android:gravity="center"
+        android:textColor="@color/ar_foreground"
         android:textSize="13sp" />
 
     <Button
         android:id="@+id/ar_close"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
+        style="@style/ArStepperButton"
         android:layout_gravity="top|start"
         android:layout_margin="8dp"
-        android:minWidth="0dp"
+        android:textSize="16sp"
+        android:textColor="@color/ar_foreground"
         android:text="@string/ar_close" />
 
     <LinearLayout
@@ -40,7 +42,6 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="bottom"
-        android:background="#E6151528"
         android:orientation="vertical">
 
         <LinearLayout
@@ -52,19 +53,18 @@
             <!-- Every known card, openable as a detail list: tap a row to place or focus it. -->
             <Button
                 android:id="@+id/ar_cards_toggle"
+                style="@style/ArPillButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:textAllCaps="false"
+                android:layout_marginEnd="8dp"
                 android:visibility="gone" />
 
             <!-- Guide-box scanning: fit one card in the grey outline for a precise read. -->
             <Button
                 android:id="@+id/ar_guide"
+                style="@style/ArPillButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:textAllCaps="false"
                 android:text="@string/ar_guide" />
 
             <View
@@ -75,20 +75,19 @@
             <!-- Debug builds only: toggles saving Y-plane frames for the scan-tuning corpus. -->
             <Button
                 android:id="@+id/ar_capture"
+                style="@style/ArPillButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginEnd="8dp"
-                android:textAllCaps="false"
                 android:text="@string/ar_capture"
                 android:visibility="gone" />
 
             <!-- Clears the scanner's memory — removed and rejected readings get a fresh try. -->
             <Button
                 android:id="@+id/ar_rescan"
+                style="@style/ArPillButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginEnd="8dp"
-                android:textAllCaps="false"
                 android:text="@string/ar_rescan" />
         </LinearLayout>
 
@@ -96,13 +95,15 @@
             android:id="@+id/ar_card_list_scroll"
             android:layout_width="match_parent"
             android:layout_height="280dp"
-            android:background="#E6151528"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/ar_panel_bg"
             android:visibility="gone">
 
             <LinearLayout
                 android:id="@+id/ar_card_list"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:paddingVertical="4dp"
                 android:orientation="vertical" />
         </ScrollView>
 
@@ -110,9 +111,23 @@
             android:id="@+id/ar_panel"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:background="#E6151528"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/ar_panel_bg"
             android:orientation="vertical"
-            android:padding="8dp">
+            android:padding="12dp">
+
+            <!-- Who the panel is editing: the focused card's name or the focused player. -->
+            <TextView
+                android:id="@+id/ar_panel_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="6dp"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="@color/ar_orange"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:visibility="gone" />
 
             <HorizontalScrollView
                 android:layout_width="match_parent"
@@ -126,126 +141,129 @@
                     android:orientation="horizontal" />
             </HorizontalScrollView>
 
-        <LinearLayout
-            android:id="@+id/ar_stat_row"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal">
-
-            <Button
-                android:id="@+id/ar_stat_pp"
-                style="@style/ArStatButton"
-                android:text="@string/ar_stat_pp" />
-
-            <Button
-                android:id="@+id/ar_stat_mm"
-                style="@style/ArStatButton"
-                android:text="@string/ar_stat_mm" />
-
-            <Button
-                android:id="@+id/ar_stat_pm"
-                style="@style/ArStatButton"
-                android:text="@string/ar_stat_pm" />
-
-            <Button
-                android:id="@+id/ar_stat_mp"
-                style="@style/ArStatButton"
-                android:text="@string/ar_stat_mp" />
-
-            <Button
-                android:id="@+id/ar_stat_custom"
-                style="@style/ArStatButton"
-                android:text="@string/ar_stat_custom" />
-        </LinearLayout>
-
-        <!-- Game mode only: the focused player's life stepper. -->
-        <LinearLayout
-            android:id="@+id/ar_life_row"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:visibility="gone">
-
-            <TextView
-                android:id="@+id/ar_life_label"
-                android:layout_width="0dp"
+            <LinearLayout
+                android:id="@+id/ar_stat_row"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:textColor="#FFFFFF"
-                android:textSize="14sp" />
+                android:layout_marginTop="8dp"
+                android:orientation="horizontal">
 
-            <Button
-                android:id="@+id/ar_life_minus"
-                android:layout_width="wrap_content"
+                <Button
+                    android:id="@+id/ar_stat_pp"
+                    style="@style/ArStatButton"
+                    android:text="@string/ar_stat_pp" />
+
+                <Button
+                    android:id="@+id/ar_stat_mm"
+                    style="@style/ArStatButton"
+                    android:text="@string/ar_stat_mm" />
+
+                <Button
+                    android:id="@+id/ar_stat_pm"
+                    style="@style/ArStatButton"
+                    android:text="@string/ar_stat_pm" />
+
+                <Button
+                    android:id="@+id/ar_stat_mp"
+                    style="@style/ArStatButton"
+                    android:text="@string/ar_stat_mp" />
+
+                <Button
+                    android:id="@+id/ar_stat_custom"
+                    style="@style/ArStatButton"
+                    android:text="@string/ar_stat_custom" />
+            </LinearLayout>
+
+            <!-- Game mode only: the focused player's life stepper. -->
+            <LinearLayout
+                android:id="@+id/ar_life_row"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:minWidth="48dp"
-                android:text="@string/ar_tax_minus" />
+                android:layout_marginTop="8dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:visibility="gone">
 
-            <Button
-                android:id="@+id/ar_life_plus"
-                android:layout_width="wrap_content"
+                <TextView
+                    android:id="@+id/ar_life_label"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:textColor="@color/ar_foreground"
+                    android:textSize="20sp"
+                    android:textStyle="bold" />
+
+                <Button
+                    android:id="@+id/ar_life_minus"
+                    style="@style/ArStepperButton"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:text="@string/ar_tax_minus" />
+
+                <Button
+                    android:id="@+id/ar_life_plus"
+                    style="@style/ArStepperButton"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:layout_marginStart="8dp"
+                    android:text="@string/ar_tax_plus" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:minWidth="48dp"
-                android:text="@string/ar_tax_plus" />
-        </LinearLayout>
+                android:layout_marginTop="8dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
 
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
+                <Button
+                    android:id="@+id/ar_keyword"
+                    style="@style/ArPillButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/ar_keyword_button" />
 
-            <Button
-                android:id="@+id/ar_keyword"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:textAllCaps="false"
-                android:text="@string/ar_keyword_button" />
+                <!-- Game mode, scanned card focused: bind it to a player as their commander. -->
+                <Button
+                    android:id="@+id/ar_set_commander"
+                    style="@style/ArPillButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:text="@string/ar_set_commander"
+                    android:visibility="gone" />
 
-            <!-- Game mode, scanned card focused: bind it to a player as their commander. -->
-            <Button
-                android:id="@+id/ar_set_commander"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:textAllCaps="false"
-                android:text="@string/ar_set_commander"
-                android:visibility="gone" />
+                <View
+                    android:layout_width="0dp"
+                    android:layout_height="0dp"
+                    android:layout_weight="1" />
 
-            <View
-                android:layout_width="0dp"
-                android:layout_height="0dp"
-                android:layout_weight="1" />
+                <Button
+                    android:id="@+id/ar_tax_minus"
+                    style="@style/ArStepperButton"
+                    android:text="@string/ar_tax_minus" />
 
-            <Button
-                android:id="@+id/ar_tax_minus"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:minWidth="48dp"
-                android:text="@string/ar_tax_minus" />
+                <TextView
+                    android:id="@+id/ar_tax_label"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:paddingHorizontal="10dp"
+                    android:textColor="@color/ar_foreground"
+                    android:textSize="14sp" />
 
-            <TextView
-                android:id="@+id/ar_tax_label"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:paddingHorizontal="8dp"
-                android:textColor="#FFFFFF"
-                android:textSize="14sp" />
-
-            <Button
-                android:id="@+id/ar_tax_plus"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:minWidth="48dp"
-                android:text="@string/ar_tax_plus" />
-        </LinearLayout>
+                <Button
+                    android:id="@+id/ar_tax_plus"
+                    style="@style/ArStepperButton"
+                    android:text="@string/ar_tax_plus" />
+            </LinearLayout>
 
             <TextView
                 android:id="@+id/ar_hint_text"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
                 android:text="@string/ar_hint"
-                android:textColor="#99FFFFFF"
+                android:textColor="@color/ar_text_dim"
                 android:textSize="11sp" />
         </LinearLayout>
     </LinearLayout>

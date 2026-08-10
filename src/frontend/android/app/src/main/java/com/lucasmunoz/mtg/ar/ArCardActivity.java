@@ -153,6 +153,8 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     private LinearLayout cardList;
     private boolean cardListOpen;
     private View panel;
+    /** Names what the panel is editing: the focused card, or the focused player in game mode. */
+    private TextView panelTitle;
 
     /** Non-null only in Commander game mode; the web layer owns it, this screen edits a copy. */
     private GameSession game;
@@ -247,6 +249,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         });
         findViewById(R.id.ar_guide).setOnClickListener(v -> toggleGuideBox((Button) v));
         panel = findViewById(R.id.ar_panel);
+        panelTitle = findViewById(R.id.ar_panel_title);
         overlay = findViewById(R.id.ar_overlay);
         overlay.setListener(this);
 
@@ -476,7 +479,9 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             statusParams.topMargin = bars.top + (int) (8 * density);
             statusText.setLayoutParams(statusParams);
 
-            bottom.setPadding(bars.left, 0, bars.right, bars.bottom);
+            // The bottom chrome floats as rounded panels, so it keeps a margin inside the bars.
+            int pad = (int) (8 * density);
+            bottom.setPadding(bars.left + pad, 0, bars.right + pad, bars.bottom + pad);
             return WindowInsetsCompat.CONSUMED;
         });
     }
@@ -1353,11 +1358,11 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         }
         CardCounters counters = focusedCounters();
         chipRow.removeAllViews();
+        ActiveCard card = focusedKey == null ? null : cardsByKey.get(focusedKey);
+        setPanelTitle(card == null ? null : card.name);
         if (counters == null) {
             return;
         }
-
-        ActiveCard card = focusedKey == null ? null : cardsByKey.get(focusedKey);
 
         // The card's own keywords first: tap for the glossary definition. They are part of the
         // card, so there is nothing to remove.
@@ -1455,6 +1460,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     private void refreshGameUi() {
         chipRow.removeAllViews();
         GamePlayer player = focusedPlayer();
+        setPanelTitle(player == null ? null : tokenName(player));
         if (player == null) {
             return;
         }
@@ -1511,12 +1517,25 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         overlay.setChips(card.key, labels, summary);
     }
 
+    private void setPanelTitle(String title) {
+        if (title == null || title.isEmpty()) {
+            panelTitle.setVisibility(View.GONE);
+        } else {
+            panelTitle.setText(title);
+            panelTitle.setVisibility(View.VISIBLE);
+        }
+    }
+
     private void addChip(String label, Runnable onTap) {
-        Button chip = new Button(this);
+        // The style rides in as defStyleRes — a plain new Button() would be a full-size
+        // default-themed Material button, far too heavy for a counter chip.
+        Button chip = new Button(this, null, 0, R.style.ArChip);
         chip.setText(label);
-        chip.setAllCaps(false);
         chip.setOnClickListener(v -> onTap.run());
-        chipRow.addView(chip);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        params.setMarginEnd((int) (6 * getResources().getDisplayMetrics().density));
+        chipRow.addView(chip, params);
     }
 
     // -------------------------------------------------------------------------------- GL renderer
