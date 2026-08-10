@@ -47,13 +47,6 @@ public class CardArPlugin extends Plugin {
         call.resolve();
     }
 
-    /** Opens the AR screen with no card: the camera identifies one by reading its title. */
-    @PluginMethod
-    public void scan(PluginCall call) {
-        getActivity().startActivity(new Intent(getActivity(), ArCardActivity.class));
-        call.resolve();
-    }
-
     /**
      * Opens the AR game session: each player's recognised commander gets a badge with its
      * owner's name, life and tax, adjustable in place. Resolves with the updated players when

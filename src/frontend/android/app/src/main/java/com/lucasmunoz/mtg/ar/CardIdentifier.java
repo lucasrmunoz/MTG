@@ -1,6 +1,6 @@
 package com.lucasmunoz.mtg.ar;
 
-import android.graphics.Rect;
+import android.graphics.Bitmap;
 import android.media.Image;
 import android.os.SystemClock;
 import android.util.Log;
@@ -13,6 +13,7 @@ import com.google.mlkit.vision.text.TextRecognition;
 import com.google.mlkit.vision.text.TextRecognizer;
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -32,6 +33,11 @@ import java.util.concurrent.ExecutorService;
  * *shape*, and an ambiguous read matches nothing rather than picking a card. Wrong reads are
  * correctable: a removed card's name stays out until {@link #rescan} deliberately reopens
  * everything.
+ *
+ * Guide-box passes do not OCR the raw frame. The luma plane is cropped to the aimed box,
+ * contrast-stretched and upscaled first — so a bright background's auto-exposure crush or a
+ * glare wash does not decide whether the text is readable — and read in both orientations,
+ * so a card facing the other player identifies too.
  */
 final class CardIdentifier {
 
@@ -40,14 +46,9 @@ final class CardIdentifier {
         void onCandidates(List<ScryfallLookup.CardSummary> candidates);
     }
 
-    interface ScanListener {
-        /**
-         * Live scanning feedback, called off the main thread. After each OCR pass, outlines
-         * holds a view-space 4-corner polygon (8 floats) per text line being read;
-         * when a lookup settles the call carries null outlines (the ones on screen
-         * are still current) with the refreshed pending list.
-         */
-        void onScanActivity(List<float[]> outlines, List<String> pendingTitles);
+    interface GuideListener {
+        /** Called on the main thread each time a guided pass reads text inside the box. */
+        void onGuideRead();
     }
 
     private static final String TAG = "CardIdentifier";
@@ -64,24 +65,32 @@ final class CardIdentifier {
      */
     static final int ROTATION_DEGREES = 90;
 
+    /** The aimed card upside down — how an opponent's card across the table reads. */
+    private static final int FLIPPED_ROTATION_DEGREES = 270;
+
     /** Reads reach this far beyond the outline, forgiving a card that overflows it. */
     private static final float GUIDE_MARGIN_FRAC = 0.10f;
+
+    /** Title glyphs sit near ML Kit's minimum at CPU-image resolution; doubling fixes that. */
+    private static final int GUIDE_UPSCALE = 2;
+
+    /** A guide crop smaller than this holds no readable card; the pass is skipped. */
+    private static final int MIN_CROP_PX = 48;
 
     private final TextRecognizer recognizer =
             TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
     private final ExecutorService lookupExecutor;
     private final CardNameCatalog catalog;
     private final Listener listener;
-    private final ScanListener scanListener;
+    private final GuideListener guideListener;
 
     private volatile boolean recognizing;
     private long lastAttemptMs;
 
     /**
      * View-space {left, top, right, bottom} of the on-screen guide box, or null for ambient
-     * scanning. While set, reading is confined to the box: every line inside it is matched
-     * against the whole-card name catalog and the collector line is parsed from the same
-     * lines, all describing the one aimed card — never frame-wide.
+     * scanning. While set, reading is confined to the box: the frame is cropped to it before
+     * OCR, and every line the crop yields describes the one aimed card — never frame-wide.
      */
     private volatile float[] guideBox;
 
@@ -112,8 +121,6 @@ final class CardIdentifier {
     /** Readings Scryfall already rejected, so noise lines are not re-queried every frame. */
     private final Set<String> rejected = new HashSet<>();
     private final Set<String> pending = new HashSet<>();
-    /** What each pending lookup is about, human-readable, for the "checking …" status line. */
-    private final Map<String, String> pendingDisplay = new LinkedHashMap<>();
     /**
      * Candidates keyed by card name. A collector-line hit ("SPM 195") names the exact printing
      * on the table and replaces a name hit for the same card, which for a basic land would
@@ -126,11 +133,11 @@ final class CardIdentifier {
     private final Set<String> dismissedNames = new HashSet<>();
 
     CardIdentifier(ExecutorService lookupExecutor, CardNameCatalog catalog, Listener listener,
-            ScanListener scanListener) {
+            GuideListener guideListener) {
         this.lookupExecutor = lookupExecutor;
         this.catalog = catalog;
         this.listener = listener;
-        this.scanListener = scanListener;
+        this.guideListener = guideListener;
     }
 
     /** Confines scanning to a view-space box, or null to return to ambient frame-wide reads. */
@@ -156,11 +163,41 @@ final class CardIdentifier {
         } catch (NotYetAvailableException e) {
             return;
         }
+        // From here every outcome — read, skipped, degenerate crop — waits a full interval.
+        lastAttemptMs = now;
 
-        // Where the sensor image lands on screen, captured now — the frame is only valid on
-        // this thread during this update. Three corners pin down the affine display transform.
+        // Snapshot: the toggle must not switch modes between recognition and handling.
+        float[] guide = guideBox;
+        if (guide == null) {
+            recognizing = true;
+            InputImage input = InputImage.fromMediaImage(image, ROTATION_DEGREES);
+            recognizer.process(input)
+                    .addOnSuccessListener(this::handleAmbientText)
+                    .addOnCompleteListener(task -> {
+                        // The Image backs InputImage until processing completes; close it now.
+                        image.close();
+                        recognizing = false;
+                    });
+            return;
+        }
+
+        Bitmap crop = extractGuideCrop(frame, image, guide);
+        if (crop == null) {
+            return; // Not laid out over the image, or a stride this device never produces.
+        }
+        recognizing = true;
+        readGuideCrop(crop);
+    }
+
+    /**
+     * The guide region as an upscaled, contrast-stretched grayscale bitmap; always closes the
+     * image — the copy outlives it, freeing the CPU-image budget before OCR even starts.
+     */
+    private Bitmap extractGuideCrop(Frame frame, Image image, float[] guide) {
         int imageWidth = image.getWidth();
         int imageHeight = image.getHeight();
+        // Where the sensor image lands on screen, captured now — the frame is only valid on
+        // this thread during this update. Three corners pin down the affine display transform.
         float[] cornerViews = new float[6];
         frame.transformCoordinates2d(
                 Coordinates2d.IMAGE_PIXELS,
@@ -168,29 +205,103 @@ final class CardIdentifier {
                 Coordinates2d.VIEW,
                 cornerViews);
 
-        lastAttemptMs = now;
-        recognizing = true;
-        // Snapshot: the toggle must not switch modes between recognition and handling.
-        float[] guide = guideBox;
-        InputImage input = InputImage.fromMediaImage(image, ROTATION_DEGREES);
-        recognizer.process(input)
-                .addOnSuccessListener(text ->
-                        handleText(text, imageWidth, imageHeight, cornerViews, guide))
-                .addOnCompleteListener(task -> {
-                    // The Image backs InputImage until processing completes; close it only now.
-                    image.close();
-                    recognizing = false;
-                });
+        byte[] luma;
+        int rowStride;
+        try {
+            Image.Plane plane = image.getPlanes()[0];
+            if (plane.getPixelStride() != 1) {
+                // YUV_420_888 guarantees a packed Y plane; anything else would corrupt the read.
+                Log.w(TAG, "Skipping frame with Y-plane pixel stride " + plane.getPixelStride());
+                return null;
+            }
+            ByteBuffer buffer = plane.getBuffer();
+            luma = new byte[buffer.remaining()];
+            buffer.get(luma);
+            rowStride = plane.getRowStride();
+        } finally {
+            image.close();
+        }
+
+        float marginX = (guide[2] - guide[0]) * GUIDE_MARGIN_FRAC;
+        float marginY = (guide[3] - guide[1]) * GUIDE_MARGIN_FRAC;
+        float[] reach = {
+                guide[0] - marginX, guide[1] - marginY, guide[2] + marginX, guide[3] + marginY,
+        };
+        int[] box = ScanGeometry.viewBoxToImageBox(reach, imageWidth, imageHeight, cornerViews);
+        if (box == null
+                || box[2] - box[0] < MIN_CROP_PX || box[3] - box[1] < MIN_CROP_PX) {
+            return null;
+        }
+
+        int cropWidth = box[2] - box[0];
+        int cropHeight = box[3] - box[1];
+        byte[] stretched =
+                LumaOps.cropStretched(luma, rowStride, box[0], box[1], cropWidth, cropHeight);
+        int[] pixels = new int[cropWidth * cropHeight];
+        for (int i = 0; i < pixels.length; i++) {
+            int value = stretched[i] & 0xFF;
+            pixels[i] = 0xFF000000 | (value << 16) | (value << 8) | value;
+        }
+        Bitmap gray = Bitmap.createBitmap(pixels, cropWidth, cropHeight, Bitmap.Config.ARGB_8888);
+        return Bitmap.createScaledBitmap(
+                gray, cropWidth * GUIDE_UPSCALE, cropHeight * GUIDE_UPSCALE, true);
     }
 
     /**
-     * Collects the pass's readings and hands them to the resolver on the lookup thread —
-     * catalog matching over tens of thousands of names is milliseconds of work, but not
-     * main-thread milliseconds.
+     * OCRs the crop upright and then upside down — cards face their controller, so the one in
+     * the box is as likely an opponent's as the user's own. Both reads pool into one pass;
+     * listeners run on the main thread, so the shared list needs no lock.
      */
-    private void handleText(
-            Text text, int imageWidth, int imageHeight, float[] cornerViews, float[] guide) {
-        List<float[]> outlines = new ArrayList<>();
+    private void readGuideCrop(Bitmap crop) {
+        List<String> lines = new ArrayList<>();
+        InputImage upright = InputImage.fromBitmap(crop, ROTATION_DEGREES);
+        InputImage flipped = InputImage.fromBitmap(crop, FLIPPED_ROTATION_DEGREES);
+        recognizer.process(upright)
+                .addOnSuccessListener(text -> collectLines(text, lines))
+                .addOnCompleteListener(first -> recognizer.process(flipped)
+                        .addOnSuccessListener(text -> collectLines(text, lines))
+                        .addOnCompleteListener(second -> {
+                            crop.recycle();
+                            finishGuidedPass(lines);
+                            recognizing = false;
+                        }));
+    }
+
+    private static void collectLines(Text text, List<String> lines) {
+        for (Text.TextBlock block : text.getTextBlocks()) {
+            for (Text.Line line : block.getLines()) {
+                lines.add(line.getText());
+            }
+        }
+    }
+
+    /** The whole crop is the one aimed card, so every line it yielded joins the pass. */
+    private void finishGuidedPass(List<String> lines) {
+        if (!lines.isEmpty()) {
+            guideListener.onGuideRead();
+        }
+        List<String> numbers = new ArrayList<>();
+        List<String> setCodes = new ArrayList<>();
+        for (String line : lines) {
+            String number = SetLineHeuristics.parseNumber(line);
+            if (number != null && !numbers.contains(number)) {
+                numbers.add(number);
+            }
+            String setCode = SetLineHeuristics.parseSetCode(line);
+            if (setCode != null && !setCodes.contains(setCode)) {
+                setCodes.add(setCode);
+            }
+        }
+        List<SetLineHeuristics.SetAndNumber> pairs = SetLineHeuristics.pair(numbers, setCodes);
+        lookupExecutor.execute(() -> resolveReadings(lines, pairs, true));
+    }
+
+    /**
+     * Ambient reading: collects the frame's readings and hands them to the resolver on the
+     * lookup thread — catalog matching over tens of thousands of names is milliseconds of
+     * work, but not main-thread milliseconds.
+     */
+    private void handleAmbientText(Text text) {
         List<String> lines = new ArrayList<>();
         List<String> numbers = new ArrayList<>();
         List<String> setCodes = new ArrayList<>();
@@ -199,20 +310,10 @@ final class CardIdentifier {
             if (block.getLines().isEmpty()) {
                 continue;
             }
-            if (guide != null) {
-                readGuidedBlock(block, imageWidth, imageHeight, cornerViews, guide,
-                        outlines, lines, numbers, setCodes);
-                continue;
-            }
-
             // A card's title is the first line of its own text block; deeper lines are type
             // lines and rules text, which name matching would have to wade through for nothing.
             String title = TitleHeuristics.clean(block.getLines().get(0).getText());
             if (title != null) {
-                Rect box = block.getBoundingBox();
-                if (box != null) {
-                    outlines.add(viewQuadFor(box, imageWidth, imageHeight, cornerViews));
-                }
                 lines.add(title);
             }
 
@@ -231,48 +332,7 @@ final class CardIdentifier {
         }
 
         List<SetLineHeuristics.SetAndNumber> pairs = SetLineHeuristics.pair(numbers, setCodes);
-        boolean guided = guide != null;
-        lookupExecutor.execute(() -> resolveReadings(lines, pairs, guided));
-
-        scanListener.onScanActivity(outlines, snapshotPendingTitles());
-    }
-
-    /**
-     * Guide-box reading: every line inside the outline (plus a little margin) goes into the
-     * pass — the box already confines reads to one aimed card, so the whole card is searched
-     * at once without the frame-wide hazards. Line-level rather than block-first, because a
-     * block can start outside the box or lump the title with the mana cost. Every in-box line
-     * lights the outline: the feedback is about where the reader is looking.
-     */
-    private void readGuidedBlock(Text.TextBlock block, int imageWidth, int imageHeight,
-            float[] cornerViews, float[] guide,
-            List<float[]> outlines, List<String> lines, List<String> numbers,
-            List<String> setCodes) {
-        float marginX = (guide[2] - guide[0]) * GUIDE_MARGIN_FRAC;
-        float marginY = (guide[3] - guide[1]) * GUIDE_MARGIN_FRAC;
-        float[] reach = {
-                guide[0] - marginX, guide[1] - marginY, guide[2] + marginX, guide[3] + marginY,
-        };
-        for (Text.Line line : block.getLines()) {
-            Rect box = line.getBoundingBox();
-            if (box == null) {
-                continue;
-            }
-            float[] viewQuad = viewQuadFor(box, imageWidth, imageHeight, cornerViews);
-            if (!ScanGeometry.centerInBand(viewQuad, reach, 0f, 1f)) {
-                continue;
-            }
-            lines.add(line.getText());
-            String number = SetLineHeuristics.parseNumber(line.getText());
-            if (number != null && !numbers.contains(number)) {
-                numbers.add(number);
-            }
-            String setCode = SetLineHeuristics.parseSetCode(line.getText());
-            if (setCode != null && !setCodes.contains(setCode)) {
-                setCodes.add(setCode);
-            }
-            outlines.add(viewQuad);
-        }
+        lookupExecutor.execute(() -> resolveReadings(lines, pairs, false));
     }
 
     /**
@@ -313,27 +373,6 @@ final class CardIdentifier {
         }
     }
 
-    /** An ML Kit bounding box as a view-space 4-corner polygon. */
-    private static float[] viewQuadFor(
-            Rect box, int imageWidth, int imageHeight, float[] cornerViews) {
-        float[] imageBox = ScanGeometry.rotatedBoxToImage(
-                new float[] {box.left, box.top, box.right, box.bottom},
-                imageHeight, ROTATION_DEGREES);
-        return ScanGeometry.imageQuadToView(
-                boxCorners(imageBox), imageWidth, imageHeight, cornerViews);
-    }
-
-    /** A box {l, t, r, b} as the 4-corner polygon the overlay draws. */
-    private static float[] boxCorners(float[] box) {
-        return new float[] {
-                box[0], box[1], box[2], box[1], box[2], box[3], box[0], box[3],
-        };
-    }
-
-    private synchronized List<String> snapshotPendingTitles() {
-        return new ArrayList<>(pendingDisplay.values());
-    }
-
     /** Fetches details for a name the catalog confirmed — the one network call a card costs. */
     private void scheduleNameLookup(String name) {
         String key = "name:" + name.toLowerCase();
@@ -342,7 +381,6 @@ final class CardIdentifier {
                     || !pending.add(key)) {
                 return;
             }
-            pendingDisplay.put(key, name);
         }
         lookupExecutor.execute(() -> lookUp(key, false, false,
                 () -> ScryfallLookup.findByExactName(name)));
@@ -355,7 +393,6 @@ final class CardIdentifier {
             if (rejected.contains(key) || !pending.add(key)) {
                 return;
             }
-            pendingDisplay.put(key, title);
         }
         lookupExecutor.execute(() -> lookUp(key, false, guided,
                 () -> ScryfallLookup.findByFuzzyName(title)));
@@ -367,7 +404,6 @@ final class CardIdentifier {
             if (rejected.contains(key) || !pending.add(key)) {
                 return;
             }
-            pendingDisplay.put(key, pair.setCode.toUpperCase() + " " + pair.collectorNumber);
         }
         lookupExecutor.execute(() -> lookUp(key, true, guided,
                 () -> ScryfallLookup.bySetAndNumber(pair.setCode, pair.collectorNumber)));
@@ -416,10 +452,7 @@ final class CardIdentifier {
         } finally {
             synchronized (this) {
                 pending.remove(key);
-                pendingDisplay.remove(key);
             }
-            // Settled either way: the status line should stop saying this one is being checked.
-            scanListener.onScanActivity(null, snapshotPendingTitles());
         }
     }
 

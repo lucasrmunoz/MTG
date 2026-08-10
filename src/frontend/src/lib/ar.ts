@@ -63,7 +63,6 @@ export interface ArGameResult {
 
 interface CardArPlugin {
   open(options: OpenCardArOptions): Promise<void>;
-  scan(): Promise<void>;
   openGame(options: { players: ArGamePlayer[] }): Promise<ArGameResult>;
 }
 
@@ -85,13 +84,6 @@ export const cardAr = isMobileApp
           ...options,
           printings: options.printings.slice(0, MAX_REFERENCE_IMAGES),
         });
-      },
-      /**
-       * Opens the scanner with no card chosen: on-device OCR reads titles off the camera, each
-       * confirmed against Scryfall's fuzzy lookup, and the user taps the card they meant.
-       */
-      scan(): Promise<void> {
-        return plugin.scan();
       },
       /**
        * Opens the game session: every recognised commander gets a badge with its owner's name,

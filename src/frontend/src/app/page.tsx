@@ -301,18 +301,6 @@ export default function Home() {
     }
   }
 
-  /** Opens the AR scanner with no card preselected; the camera identifies one by its title. */
-  async function handleScanAr() {
-    if (cardAr === null) {
-      return;
-    }
-    try {
-      await cardAr.scan();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not open the AR scanner.");
-    }
-  }
-
   /** Closes the open card and returns to the match grid, discarding any in-flight art load. */
   function backToResults() {
     requestIdRef.current++;
@@ -386,15 +374,6 @@ export default function Home() {
               >
                 Commander game
               </Link>
-              {cardAr !== null && (
-                <button
-                  type="button"
-                  onClick={() => void handleScanAr()}
-                  className="bg-background border border-purple/40 hover:border-purple text-foreground font-semibold px-4 py-2 rounded text-sm transition-colors cursor-pointer"
-                >
-                  Scan a card in AR
-                </button>
-              )}
             </div>
 
             {error !== null && (

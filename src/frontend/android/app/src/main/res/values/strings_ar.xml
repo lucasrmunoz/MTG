@@ -1,8 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="ar_bad_launch">The AR view was opened without a card.</string>
     <string name="ar_close">✕</string>
-    <string name="ar_status_searching">Looking for %1$s — point the camera at it, or tap a surface to place it</string>
     <string name="ar_status_scan">Point the camera at your cards — each appears once recognised</string>
     <string name="ar_status_place">Tap a surface to place %1$s</string>
     <string name="ar_status_tracking">Tracking %1$s</string>
@@ -10,7 +8,6 @@
     <string name="ar_camera_denied">AR needs the camera; permission was denied.</string>
     <string name="ar_install_declined">AR needs Google Play Services for AR.</string>
     <string name="ar_unavailable">AR is not supported on this device.</string>
-    <string name="ar_image_download_failed">Could not download the card images.</string>
     <string name="ar_save_failed">Could not save counters to storage.</string>
     <string name="ar_stat_pp">+1/+1</string>
     <string name="ar_stat_mm">-1/-1</string>
@@ -28,9 +25,9 @@
     <string name="ar_life_chip">Life %1$d</string>
     <string name="ar_bad_game_launch">The AR game was opened with a broken player list.</string>
     <string name="ar_status_game">Point the camera at each commander — its owner\'s badge appears</string>
+    <string name="ar_status_game_no_commanders">Tap a life token to adjust a player — scan any card to make it a commander</string>
     <string name="ar_status_game_tracking">%1$s — %2$s</string>
     <string name="ar_game_hint">Tap a commander or life token to select its player · − / + adjust life and tax · drag tokens onto the table · point at any card to scan it in</string>
-    <string name="ar_status_checking">Reading “%1$s” — checking Scryfall…</string>
     <string name="ar_cards_toggle">Cards (%1$d)</string>
     <string name="ar_card_tracking">Tracking</string>
     <string name="ar_card_tap_to_place">Tap to place</string>

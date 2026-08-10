@@ -155,7 +155,6 @@ public final class CardOverlayView extends View {
     private final Paint tokenSurface = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint tokenLifeText = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint tokenSmallText = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint scanBorder = new Paint(Paint.ANTI_ALIAS_FLAG);
     /** The dark footprint a Flying card casts at table level. */
     private final Paint shadowFill = new Paint(Paint.ANTI_ALIAS_FLAG);
     /** Dashed vertical: a flyer's tether to its shadow, or a Reach card's grasp upward. */
@@ -172,12 +171,6 @@ public final class CardOverlayView extends View {
     private final Paint guidePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint guideActivePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
-    /** Card quads the scanner spotted this pass; stale ones stop drawing, not linger. */
-    private volatile List<float[]> scanQuads = Collections.emptyList();
-    private volatile long scanQuadsAtMs;
-    /** Just past the scan cadence (700 ms), so live outlines refresh before they expire. */
-    private static final long SCAN_REGION_TTL_MS = 900;
-    private final Path scanPath = new Path();
     private final Matrix placeMatrix = new Matrix();
     private final RectF tokenRect = new RectF();
     private final Rect tokenSrcRect = new Rect();
@@ -212,9 +205,6 @@ public final class CardOverlayView extends View {
         tokenLifeText.setShadowLayer(dp(2), 0, dp(1), Color.argb(200, 0, 0, 0));
         tokenSmallText.setColor(Color.WHITE);
         tokenSmallText.setTextAlign(Paint.Align.CENTER);
-        scanBorder.setStyle(Paint.Style.STROKE);
-        scanBorder.setStrokeWidth(dp(2.5f));
-        scanBorder.setColor(Color.argb(220, 46, 204, 113));
         guidePaint.setStyle(Paint.Style.STROKE);
         guidePaint.setStrokeWidth(dp(2.5f));
         guidePaint.setColor(Color.argb(220, 189, 195, 199));
@@ -339,13 +329,6 @@ public final class CardOverlayView extends View {
     /** Card text was just read inside the outline — draw it green for a beat, Mythic-style. */
     void markGuideBoxActive() {
         guideActiveUntilMs = SystemClock.elapsedRealtime() + GUIDE_ACTIVE_TTL_MS;
-        postInvalidate();
-    }
-
-    /** Green outlines around the card-shaped quads the scanner currently sees. */
-    void setScanQuads(List<float[]> quads) {
-        scanQuads = quads;
-        scanQuadsAtMs = SystemClock.elapsedRealtime();
         postInvalidate();
     }
 
@@ -477,17 +460,6 @@ public final class CardOverlayView extends View {
             boolean active = SystemClock.elapsedRealtime() < guideActiveUntilMs;
             canvas.drawRoundRect(guideRect, dp(12), dp(12),
                     active ? guideActivePaint : guidePaint);
-        }
-        if (SystemClock.elapsedRealtime() - scanQuadsAtMs <= SCAN_REGION_TTL_MS) {
-            for (float[] quad : scanQuads) {
-                scanPath.rewind();
-                scanPath.moveTo(quad[0], quad[1]);
-                for (int i = 1; i < 4; i++) {
-                    scanPath.lineTo(quad[i * 2], quad[i * 2 + 1]);
-                }
-                scanPath.close();
-                canvas.drawPath(scanPath, scanBorder);
-            }
         }
         for (CardPose pose : poses) {
             RenderState state = renders.get(pose.key);

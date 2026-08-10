@@ -52,7 +52,6 @@ import com.lucasmunoz.mtg.R;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -170,9 +169,6 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     private volatile float pendingTokenX;
     private volatile float pendingTokenY;
 
-    /** Titles the scanner is currently asking Scryfall about, for the status line. */
-    private volatile List<String> pendingLookupTitles = Collections.emptyList();
-
     /** Guide-box scanning: reads confined to a grey on-screen outline the user aims a card at.
      *  Volatile — the scanner's lookup thread reads it to decide on confirmation feedback. */
     private volatile boolean guideMode;
@@ -289,7 +285,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 new CardNameCatalog(new File(getFilesDir(), "scryfall-card-names.json"));
         scanExecutor.execute(catalog::ensureLoaded);
         identifier = new CardIdentifier(
-                scanExecutor, catalog, this::onCandidatesRecognized, this::onScanActivity);
+                scanExecutor, catalog, this::onCandidatesRecognized, this::onGuideRead);
 
         if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
             wireCorpusCapture();
@@ -302,10 +298,6 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         } else {
             statusText.setText(R.string.ar_status_scan);
             addCardFromIntent();
-            if (getIntent().getStringExtra(EXTRA_CARD_ID) == null) {
-                // Pure scan mode exists to read cards: start aimed, no toggle required.
-                overlay.post(this::enableGuideByDefault);
-            }
         }
     }
 
@@ -332,7 +324,6 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         keywordButton.setVisibility(View.GONE);
         lifeRow.setVisibility(View.VISIBLE);
         hintText.setText(R.string.ar_game_hint);
-        statusText.setText(R.string.ar_status_game);
         publishGameResult();
         for (GamePlayer player : game.players()) {
             // Every player gets a life token in the tray, commander or not — life stays
@@ -342,6 +333,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 adoptGameCard(player);
             }
         }
+        updateStatusLine();
     }
 
     /** A card opened from search joins immediately, with its art versions sent by the web side. */
@@ -350,7 +342,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         String cardName = getIntent().getStringExtra(EXTRA_CARD_NAME);
         String imageUrl = getIntent().getStringExtra(EXTRA_IMAGE_URL);
         if (cardId == null || cardName == null || imageUrl == null) {
-            return; // Scan mode: the camera decides which cards exist.
+            return; // The plugin validates these; the scanner alone still works without them.
         }
 
         ActiveCard card = new ActiveCard(cardId, cardName, imageUrl);
@@ -385,10 +377,9 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
 
     /**
      * Toggles guide-box scanning: a grey card-aspect outline appears mid-screen and the scanner
-     * only reads inside it — title from the top band, collector line from the bottom band,
-     * paired within that one aimed card. The deliberate, Mythic-Tools-style alternative to
-     * ambient scanning for when frame-wide reads misfire; ambient behaviour returns on toggle
-     * off.
+     * only reads inside it — the frame is cropped to the box, contrast-stretched and read in
+     * both orientations, all describing the one aimed card. The deliberate, Mythic-Tools-style
+     * alternative to ambient scanning; ambient behaviour returns on toggle off.
      */
     private void toggleGuideBox(Button button) {
         float width = overlay.getWidth();
@@ -535,19 +526,14 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     }
 
     /**
-     * Live scanner feedback, off the main thread: green outlines around the card-shaped quads
-     * the detector sees, and a status line naming what Scryfall is being asked about. Null
-     * outlines mean a lookup settled without a fresh pass — the ones on screen stay current.
+     * The scanner just read text inside the guide outline: flash the box green so the user
+     * knows the aim is right. The only live scan feedback — everything else waits for a card
+     * to actually confirm.
      */
-    private void onScanActivity(List<float[]> cardOutlines, List<String> pendingTitles) {
-        pendingLookupTitles = pendingTitles;
-        if (cardOutlines != null) {
-            overlay.setScanQuads(cardOutlines);
-            if (guideMode && !cardOutlines.isEmpty()) {
-                overlay.markGuideBoxActive();
-            }
+    private void onGuideRead() {
+        if (guideMode) {
+            overlay.markGuideBoxActive();
         }
-        runOnUiThread(this::updateStatusLine);
     }
 
     /**
@@ -1119,9 +1105,12 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 // A scanned table card is focused; same wording as scan mode.
                 statusText.setText(getString(R.string.ar_status_tracking, card.name));
             } else {
-                String checking = checkingStatus();
-                statusText.setText(checking != null ? checking : getString(
-                        guideMode ? R.string.ar_status_guide : R.string.ar_status_game));
+                // Nobody having a commander (chosen or AR-bound) changes the idle guidance:
+                // there is nothing to point the camera at, but the tray tokens still work.
+                int idle = playersByCardKey.isEmpty()
+                        ? R.string.ar_status_game_no_commanders
+                        : R.string.ar_status_game;
+                statusText.setText(getString(guideMode ? R.string.ar_status_guide : idle));
             }
             return;
         }
@@ -1129,18 +1118,8 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             statusText.setText(getString(R.string.ar_status_tracking, card.name));
             return;
         }
-        String checking = checkingStatus();
-        statusText.setText(checking != null ? checking : getString(
+        statusText.setText(getString(
                 guideMode ? R.string.ar_status_guide : R.string.ar_status_scan));
-    }
-
-    /** "Reading X — checking Scryfall…" while lookups are in flight, or null when idle. */
-    private String checkingStatus() {
-        List<String> titles = pendingLookupTitles;
-        if (titles.isEmpty()) {
-            return null;
-        }
-        return getString(R.string.ar_status_checking, titles.get(titles.size() - 1));
     }
 
     // ----------------------------------------------------------------------------- counter panel

@@ -1,88 +1,66 @@
 package com.lucasmunoz.mtg.ar;
 
 import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertThrows;
-import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertNull;
 
 import org.junit.Test;
 
-/** The OCR-box projection math: un-rotating ML Kit boxes and mapping corners onto the view. */
+/**
+ * The guide-box projection math: inverting the display transform back into sensor pixels.
+ * Test coordinates are chosen to be exact in float arithmetic, so the floor/ceil at the end
+ * cannot wobble the expected pixels by one.
+ */
 public class ScanGeometryTest {
 
     @Test
-    public void rotationZeroIsIdentity() {
-        assertArrayEquals(new float[] {10, 20, 30, 40},
-                ScanGeometry.rotatedBoxToImage(new float[] {10, 20, 30, 40}, 480, 0), 0.001f);
+    public void identityTransformMapsDirectly() {
+        // Image corners land on the view unchanged: view coords are sensor coords.
+        float[] corners = {0, 0, 640, 0, 0, 480};
+        assertArrayEquals(new int[] {160, 120, 320, 240},
+                ScanGeometry.viewBoxToImageBox(
+                        new float[] {160, 120, 320, 240}, 640, 480, corners));
     }
 
     @Test
-    public void rotationNinetyUnrotatesIntoSensorSpace() {
-        // 640x480 sensor image shown upright as 480x640. A box in the upright frame at
-        // l=100 t=200 r=150 b=300 came from sensor pixels x∈[200,300], y∈[480-150, 480-100].
-        assertArrayEquals(new float[] {200, 330, 300, 380},
-                ScanGeometry.rotatedBoxToImage(new float[] {100, 200, 150, 300}, 480, 90),
-                0.001f);
+    public void scaledDisplayTransformDividesBackOut() {
+        // Image (0,0)->(0,0), (512,0)->(1024,0), (0,512)->(0,1024): a 2x scale.
+        float[] corners = {0, 0, 1024, 0, 0, 1024};
+        assertArrayEquals(new int[] {64, 100, 128, 200},
+                ScanGeometry.viewBoxToImageBox(
+                        new float[] {128, 200, 256, 400}, 512, 512, corners));
     }
 
     @Test
-    public void unsupportedRotationThrows() {
-        assertThrows(IllegalArgumentException.class,
-                () -> ScanGeometry.rotatedBoxToImage(new float[] {0, 0, 1, 1}, 480, 180));
-    }
-
-    @Test
-    public void plainScalingMapsProportionally() {
-        // Image (0,0)->(0,0), (640,0)->(1080,0), (0,480)->(0,810): a 1.6875x scale.
-        float[] corners = {0, 0, 1080, 0, 0, 810};
-        float[] quad = {64, 100, 128, 100, 128, 200, 64, 200};
-        assertArrayEquals(
-                new float[] {108, 168.75f, 216, 168.75f, 216, 337.5f, 108, 337.5f},
-                ScanGeometry.imageQuadToView(quad, 640, 480, corners), 0.01f);
-    }
-
-    @Test
-    public void rotatedDisplayTransformReorientsTheCorners() {
-        // A display transform that rotates the image 90°: image (0,0) lands at the view's
-        // top-right, (W,0) at the bottom-right, (0,H) at the top-left.
+    public void rotatedDisplayTransformUnrotatesIntoSensorSpace() {
+        // The 640x480 sensor image shown upright as 480x640: image (0,0) lands at the view's
+        // top-right, (640,0) at the bottom-right, (0,480) at the top-left. A view box at
+        // l=120 t=200 r=180 b=300 came from sensor pixels x∈[200,300], y∈[480-180, 480-120].
         float[] corners = {480, 0, 480, 640, 0, 0};
-        float[] quad = {0, 0, 640, 0, 640, 480, 0, 480};
-        assertArrayEquals(new float[] {480, 0, 480, 640, 0, 640, 0, 0},
-                ScanGeometry.imageQuadToView(quad, 640, 480, corners), 0.01f);
+        assertArrayEquals(new int[] {200, 300, 300, 360},
+                ScanGeometry.viewBoxToImageBox(
+                        new float[] {120, 200, 180, 300}, 640, 480, corners));
     }
 
     @Test
-    public void cropOffsetShiftsTheQuad() {
-        // The view shows a centre crop: image x is shifted left by 60 view px.
-        float[] corners = {-60, 0, 1020, 0, -60, 810};
-        float[] quad = {0, 0, 640, 0, 640, 480, 0, 480};
-        assertArrayEquals(new float[] {-60, 0, 1020, 0, 1020, 810, -60, 810},
-                ScanGeometry.imageQuadToView(quad, 640, 480, corners), 0.01f);
-    }
-
-    /** A 100x200 box at (100,100); its title band is the top 35%, rows 100..170. */
-    private static final float[] BOX = {100, 100, 200, 300};
-
-    private static float[] quadAt(float cx, float cy) {
-        return new float[] {cx - 5, cy - 2, cx + 5, cy - 2, cx + 5, cy + 2, cx - 5, cy + 2};
+    public void resultIsClampedToTheImage() {
+        float[] corners = {0, 0, 640, 0, 0, 480};
+        assertArrayEquals(new int[] {0, 0, 640, 480},
+                ScanGeometry.viewBoxToImageBox(
+                        new float[] {-50, -50, 700, 500}, 640, 480, corners));
     }
 
     @Test
-    public void titleBandAcceptsTheBoxTopAndRejectsTheMiddle() {
-        assertTrue(ScanGeometry.centerInBand(quadAt(150, 120), BOX, 0f, 0.35f));
-        assertFalse(ScanGeometry.centerInBand(quadAt(150, 200), BOX, 0f, 0.35f));
+    public void boxEntirelyOffTheImageIsNull() {
+        float[] corners = {0, 0, 640, 0, 0, 480};
+        assertNull(ScanGeometry.viewBoxToImageBox(
+                new float[] {700, 100, 800, 200}, 640, 480, corners));
     }
 
     @Test
-    public void collectorBandAcceptsTheBoxBottomAndRejectsTheMiddle() {
-        assertTrue(ScanGeometry.centerInBand(quadAt(150, 280), BOX, 0.65f, 1f));
-        assertFalse(ScanGeometry.centerInBand(quadAt(150, 200), BOX, 0.65f, 1f));
-    }
-
-    @Test
-    public void bandsRejectCentresOutsideTheBoxEntirely() {
-        assertFalse(ScanGeometry.centerInBand(quadAt(50, 120), BOX, 0f, 0.35f));
-        assertFalse(ScanGeometry.centerInBand(quadAt(150, 40), BOX, 0f, 1f));
-        assertFalse(ScanGeometry.centerInBand(quadAt(150, 340), BOX, 0f, 1f));
+    public void degenerateTransformIsNull() {
+        // All three image corners land on one view point: nothing can be inverted.
+        float[] corners = {10, 10, 10, 10, 10, 10};
+        assertNull(ScanGeometry.viewBoxToImageBox(
+                new float[] {0, 0, 100, 100}, 640, 480, corners));
     }
 }
