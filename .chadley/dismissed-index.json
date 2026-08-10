@@ -12,5 +12,12 @@
     "severity": "normal",
     "dismissedAt": "2026-08-09T22:17:18.749Z",
     "dismissedAtContentSha": "37205936d1aacbc6c903b31aeee71e6b825849604b34eb90074a91d3896aec98"
+  },
+  {
+    "fingerprint": "691f161494c74edb8f36c440bdd9e3937af5af0a",
+    "kind": "bug",
+    "severity": "normal",
+    "dismissedAt": "2026-08-10T20:10:17.760Z",
+    "dismissedAtContentSha": "a8239c6d7eefab06f5ecd62849cf46395a5690f3a3c05a3d5c498501c9fde357"
   }
 ]
