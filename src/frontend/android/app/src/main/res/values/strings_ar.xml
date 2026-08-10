@@ -43,6 +43,7 @@
     <string name="ar_capture_saved_toast">Saved %1$d corpus frames to %2$s</string>
     <string name="ar_capture_failed">Frame save failed — capture stopped.</string>
     <string name="ar_rescan_toast">Retrying everything in view.</string>
+    <string name="ar_duplicate_scan">Same card as the last scan — tap the screen to scan %1$s again.</string>
     <string name="ar_token_place_failed">No surface found there — the token went back to its tray.</string>
     <string name="ar_no_definition">This mechanic isn\'t in the glossary yet.</string>
     <string name="ar_remove_one">Remove one</string>

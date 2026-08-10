@@ -51,6 +51,15 @@ final class CardIdentifier {
         void onGuideRead();
     }
 
+    interface DuplicateListener {
+        /**
+         * Called off the main thread when a guided pass re-reads the most recently scanned
+         * card. Re-reads never re-match on their own; {@link #rescanMostRecent} is the
+         * deliberate way to scan the same card twice.
+         */
+        void onDuplicateScan(String cardName);
+    }
+
     private static final String TAG = "CardIdentifier";
 
     /** How often to OCR a frame; more brings no benefit at hand-held steadiness. */
@@ -83,6 +92,11 @@ final class CardIdentifier {
     private final CardNameCatalog catalog;
     private final Listener listener;
     private final GuideListener guideListener;
+    private final DuplicateListener duplicateListener;
+
+    /** Name key of the most recent recorded match; a guided re-read of it is a duplicate scan.
+     *  Guarded by this. */
+    private String lastScanNameKey;
 
     private volatile boolean recognizing;
     private long lastAttemptMs;
@@ -133,11 +147,12 @@ final class CardIdentifier {
     private final Set<String> dismissedNames = new HashSet<>();
 
     CardIdentifier(ExecutorService lookupExecutor, CardNameCatalog catalog, Listener listener,
-            GuideListener guideListener) {
+            GuideListener guideListener, DuplicateListener duplicateListener) {
         this.lookupExecutor = lookupExecutor;
         this.catalog = catalog;
         this.listener = listener;
         this.guideListener = guideListener;
+        this.duplicateListener = duplicateListener;
     }
 
     /** Confines scanning to a view-space box, or null to return to ambient frame-wide reads. */
@@ -355,7 +370,7 @@ final class CardIdentifier {
             if (guided) {
                 rememberGuideName(name);
             }
-            scheduleNameLookup(name);
+            scheduleNameLookup(name, guided);
         }
 
         if (names.isEmpty() && (guided || !catalog.isReady())) {
@@ -374,16 +389,30 @@ final class CardIdentifier {
     }
 
     /** Fetches details for a name the catalog confirmed — the one network call a card costs. */
-    private void scheduleNameLookup(String name) {
-        String key = "name:" + name.toLowerCase();
+    private void scheduleNameLookup(String name, boolean guided) {
+        String nameKey = name.toLowerCase();
+        String key = "name:" + nameKey;
+        String duplicateOfLastScan = null;
+        boolean schedule = false;
         synchronized (this) {
-            if (rejected.contains(key) || matchedByName.containsKey(name.toLowerCase())
-                    || !pending.add(key)) {
-                return;
+            Match existing = matchedByName.get(nameKey);
+            if (existing != null) {
+                // Aiming at the card just scanned: never silently re-match — the listener
+                // invites the deliberate tap that reopens it instead.
+                if (guided && nameKey.equals(lastScanNameKey)) {
+                    duplicateOfLastScan = existing.card.name;
+                }
+            } else if (!rejected.contains(key) && pending.add(key)) {
+                schedule = true;
             }
         }
-        lookupExecutor.execute(() -> lookUp(key, false, false,
-                () -> ScryfallLookup.findByExactName(name)));
+        if (duplicateOfLastScan != null) {
+            duplicateListener.onDuplicateScan(duplicateOfLastScan);
+        }
+        if (schedule) {
+            lookupExecutor.execute(() -> lookUp(key, false, false,
+                    () -> ScryfallLookup.findByExactName(name)));
+        }
     }
 
     /** The last-resort network fuzzy lookup for a pass no catalog match could explain. */
@@ -473,6 +502,22 @@ final class CardIdentifier {
         String nameKey = cardName.toLowerCase();
         dismissedNames.add(nameKey);
         matchedByName.remove(nameKey);
+        if (nameKey.equals(lastScanNameKey)) {
+            lastScanNameKey = null;
+        }
+    }
+
+    /**
+     * Reopens the most recent scan so the next pass may confirm it again — the deliberate
+     * "tap to scan this card again". Returns the reopened card's name, or null when there is
+     * no scan to reopen.
+     */
+    synchronized String rescanMostRecent() {
+        if (lastScanNameKey == null) {
+            return null;
+        }
+        Match removed = matchedByName.remove(lastScanNameKey);
+        return removed == null ? null : removed.card.name;
     }
 
     /**
@@ -484,6 +529,7 @@ final class CardIdentifier {
         dismissedNames.clear();
         matchedByName.clear();
         rejected.clear();
+        lastScanNameKey = null;
     }
 
     /** Records a hit; an exact printing displaces a name hit for the same card. */
@@ -498,6 +544,7 @@ final class CardIdentifier {
             return null;
         }
         matchedByName.put(nameKey, new Match(card, exact));
+        lastScanNameKey = nameKey;
 
         List<ScryfallLookup.CardSummary> snapshot = new ArrayList<>();
         for (Match match : matchedByName.values()) {

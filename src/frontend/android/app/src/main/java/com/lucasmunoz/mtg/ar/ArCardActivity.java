@@ -185,6 +185,14 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     private long statusFlashUntilMs;
     private static final long STATUS_FLASH_MS = 1800;
 
+    /** Set while the "same card again" toast invitation stands; an empty tap consumes it. */
+    private volatile boolean duplicateTapArmed;
+    /** A card reopened by that tap: its next confirmation flashes like a fresh scan. */
+    private volatile String rearmedScanName;
+    /** When the duplicate toast last showed; re-reads recur every guided pass, ~3 a second. */
+    private long lastDuplicateToastMs;
+    private static final long DUPLICATE_TOAST_INTERVAL_MS = 3500;
+
     private final Object sessionLock = new Object();
     private Session session;
     /** True when reference images changed since the session last configured. Guarded by lock. */
@@ -288,7 +296,8 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 new CardNameCatalog(new File(getFilesDir(), "scryfall-card-names.json"));
         scanExecutor.execute(catalog::ensureLoaded);
         identifier = new CardIdentifier(
-                scanExecutor, catalog, this::onCandidatesRecognized, this::onGuideRead);
+                scanExecutor, catalog, this::onCandidatesRecognized, this::onGuideRead,
+                this::onDuplicateScan);
 
         if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
             wireCorpusCapture();
@@ -496,6 +505,12 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 // enrich them with raw printing ids would corrupt that keying.
                 continue;
             }
+            if (candidate.name.equalsIgnoreCase(rearmedScanName)) {
+                // The card reopened by a "scan it again" tap confirmed once more: same flash
+                // and buzz as a fresh scan, even though nothing about the card is new.
+                rearmedScanName = null;
+                maybeFlashGuideConfirm(candidate);
+            }
             ActiveCard existing = findCardByName(candidate.name);
             if (existing == null) {
                 ActiveCard added =
@@ -505,6 +520,8 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 added.setName = candidate.setName;
                 runOnUiThread(() -> adoptCard(added, true));
                 maybeFlashGuideConfirm(candidate);
+                // A new card confirming makes any standing "same card again" invitation stale.
+                duplicateTapArmed = false;
             } else if (existing.printingUrls.putIfAbsent(candidate.id, candidate.imageUrl)
                     == null) {
                 maybeFlashGuideConfirm(candidate);
@@ -539,6 +556,28 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         if (guideMode) {
             overlay.markGuideBoxActive();
         }
+    }
+
+    /**
+     * A guided pass re-read the card that just confirmed. The scanner never re-matches it on
+     * its own — instead the user is invited to tap the screen when it truly is a second copy
+     * (or the same card, deliberately again). Off the main thread; the toast is throttled
+     * because re-reads recur every pass while the camera lingers.
+     */
+    private void onDuplicateScan(String cardName) {
+        duplicateTapArmed = true;
+        runOnUiThread(() -> {
+            if (!guideMode) {
+                return;
+            }
+            long now = SystemClock.uptimeMillis();
+            if (now - lastDuplicateToastMs < DUPLICATE_TOAST_INTERVAL_MS) {
+                return;
+            }
+            lastDuplicateToastMs = now;
+            Toast.makeText(this, getString(R.string.ar_duplicate_scan, cardName),
+                    Toast.LENGTH_SHORT).show();
+        });
     }
 
     /**
@@ -905,6 +944,17 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
 
     @Override
     public void onTapEmpty(float x, float y) {
+        // The invited "scan it again" tap — but an explicitly armed chip placement outranks it.
+        if (duplicateTapArmed && pendingPlacementKey == null) {
+            duplicateTapArmed = false;
+            String reopened = identifier.rescanMostRecent();
+            if (reopened != null) {
+                // Let the confirm flash celebrate this card once more when it re-matches.
+                guideConfirmedNames.remove(reopened);
+                rearmedScanName = reopened;
+                return;
+            }
+        }
         // Placement needs a hit test against the AR frame, which only the GL thread can run.
         pendingTapX = x;
         pendingTapY = y;
