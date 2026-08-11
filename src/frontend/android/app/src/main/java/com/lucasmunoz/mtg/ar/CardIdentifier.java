@@ -38,6 +38,12 @@ import java.util.concurrent.ExecutorService;
  * contrast-stretched and upscaled first — so a bright background's auto-exposure crush or a
  * glare wash does not decide whether the text is readable — and read in both orientations,
  * so a card facing the other player identifies too.
+ *
+ * Guided readings also vote before they are believed: a matched name or collector line must
+ * be reproduced by a second pass before its lookup fires. A lone misread digit names a wrong
+ * printing that the name cross-check cannot catch on a basic land — any Island agrees with
+ * "Island" — but the same misread rarely repeats, so it loses the vote while the true
+ * reading confirms one pass (~350 ms) later.
  */
 final class CardIdentifier {
 
@@ -121,6 +127,17 @@ final class CardIdentifier {
     /** A box name older than this is stale — the user has re-aimed since. */
     private static final long GUIDE_NAME_TTL_MS = 5000;
 
+    /**
+     * Guided passes vote: a reading must be seen by this many passes (within the guide-name
+     * TTL) before its lookup fires. At the ~350 ms guide cadence a steady card confirms one
+     * pass later than before, and a misread that a single pass produced never gets a second
+     * vote — it is dropped instead of adopted as the wrong printing.
+     */
+    private static final int GUIDE_AGREEING_PASSES = 2;
+
+    private final GuideConsensus guideConsensus =
+            new GuideConsensus(GUIDE_AGREEING_PASSES, GUIDE_NAME_TTL_MS);
+
     /** One recognised card, remembering whether it came from the exact collector line. */
     private static final class Match {
         final ScryfallLookup.CardSummary card;
@@ -158,6 +175,7 @@ final class CardIdentifier {
     /** Confines scanning to a view-space box, or null to return to ambient frame-wide reads. */
     void setGuideBox(float[] viewBox) {
         this.guideBox = viewBox;
+        guideConsensus.reset();
         synchronized (this) {
             // Either direction is a fresh aim; names from before the toggle prove nothing.
             guideNamesSeenAtMs.clear();
@@ -359,6 +377,7 @@ final class CardIdentifier {
      */
     private void resolveReadings(
             List<String> lines, List<SetLineHeuristics.SetAndNumber> pairs, boolean guided) {
+        long now = SystemClock.elapsedRealtime();
         Set<String> names = new LinkedHashSet<>();
         for (String line : lines) {
             String name = catalog.bestMatch(line);
@@ -368,7 +387,11 @@ final class CardIdentifier {
         }
         for (String name : names) {
             if (guided) {
+                // Corroboration wants the freshest names even while the vote is still open.
                 rememberGuideName(name);
+                if (!guideConsensus.confirm("name:" + name.toLowerCase(), now)) {
+                    continue;
+                }
             }
             scheduleNameLookup(name, guided);
         }
@@ -384,6 +407,10 @@ final class CardIdentifier {
         }
 
         for (SetLineHeuristics.SetAndNumber pair : pairs) {
+            if (guided && !guideConsensus.confirm(
+                    "printing:" + pair.setCode + "/" + pair.collectorNumber, now)) {
+                continue;
+            }
             schedulePrintingLookup(pair, guided);
         }
     }

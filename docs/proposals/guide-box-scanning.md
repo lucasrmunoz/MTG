@@ -1,6 +1,7 @@
 # Guide-box scanning
 
-**Status: shipped 2026-08-06; identification reworked 2026-08-09** — the deliberate
+**Status: shipped 2026-08-06; identification reworked 2026-08-09; pass consensus added
+2026-08-11** — the deliberate
 alternative to ambient scanning, alongside it, not replacing it. The original per-section
 read-and-match chain (every candidate line its own Scryfall round trip, serial on one thread)
 proved far too slow at the table; identification now matches the whole card's text locally
@@ -35,6 +36,13 @@ double the ambient cadence:
   instant, so the old race against a slow network title lookup is gone. With no live name
   (foil glare), the collector line stands alone. Disagreements are dropped without being
   remembered as rejected, so a later pass retries once the right name matches.
+- **Consensus:** a guided reading — matched name or collector line — is believed only after a
+  second pass reproduces it (`GuideConsensus`), so passes effectively vote before a result is
+  shown. This catches the misread the name cross-check cannot: on a basic land a wrong digit
+  still names *an* Island, agrees with the box name, and used to be adopted as the wrong
+  printing — sticky until a manual rescan. A lone misread rarely repeats, so it loses the
+  vote; the true reading repeats every pass and confirms ~350 ms later. Sightings expire with
+  the same 5-second TTL as box names, so a re-aim starts a fresh vote.
 - **Confirmation:** the first time an aimed card confirms, the status line flashes
   "✓ Name — Set" with a haptic tap: aim, buzz, next card.
 
