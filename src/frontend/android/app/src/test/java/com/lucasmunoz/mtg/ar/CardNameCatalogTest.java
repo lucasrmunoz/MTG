@@ -40,6 +40,26 @@ public class CardNameCatalogTest {
     }
 
     @Test
+    public void exactMatchDemandsADistanceZeroRead() {
+        CardNameCatalog catalog = catalogOf("Island", "Lands", "Stand // Deliver");
+        assertEquals("Island", catalog.exactMatch("Island"));
+        assertEquals("Stand // Deliver", catalog.exactMatch("Stand"));
+        // One edit away is bestMatch territory, never an exact read.
+        assertNull(catalog.exactMatch("Land"));
+        assertEquals("Lands", catalog.bestMatch("Land"));
+        assertNull(catalog.exactMatch("Whenever a creature dies"));
+        assertNull(catalog.exactMatch("ab"));
+        assertNull(catalog.exactMatch(null));
+    }
+
+    @Test
+    public void exactMatchForgivesNormalizationOnly() {
+        CardNameCatalog catalog = catalogOf("Lórien Revealed", "Urza's Bauble");
+        assertEquals("Lórien Revealed", catalog.exactMatch("LORIEN REVEALED"));
+        assertEquals("Urza's Bauble", catalog.exactMatch("Urzas Bauble"));
+    }
+
+    @Test
     public void closeMisreadStillMatches() {
         CardNameCatalog catalog = catalogOf("Lightning Bolt", "Llanowar Elves");
         // OCR swapped a letter and lost one: distance 2 on a long name.

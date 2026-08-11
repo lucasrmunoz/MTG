@@ -82,6 +82,21 @@ final class CardNameCatalog {
     }
 
     /**
+     * The catalog name this line reads exactly (after normalization), or null. Distinguishes
+     * a clean title read from {@link #bestMatch}'s edit-tolerant hits, which callers may want
+     * to discard when an exact read is present — a type-line fragment like "Land" sits one
+     * edit from a real card name, and OCR noise from an upside-down read does the same.
+     */
+    String exactMatch(String ocrLine) {
+        Map<String, String> names = namesByNormalized;
+        if (names.isEmpty() || ocrLine == null) {
+            return null;
+        }
+        String query = normalize(ocrLine);
+        return query.length() < MIN_QUERY_LENGTH ? null : names.get(query);
+    }
+
+    /**
      * The catalog name best matching an OCR line, or null when nothing is close enough or two
      * different names are equally close. Exact normalized hits win outright; otherwise the
      * closest name within a length-scaled edit budget (1 edit for short names, 2 for longer)

@@ -43,7 +43,10 @@ import java.util.concurrent.ExecutorService;
  * be reproduced by a second pass before its lookup fires. A lone misread digit names a wrong
  * printing that the name cross-check cannot catch on a basic land — any Island agrees with
  * "Island" — but the same misread rarely repeats, so it loses the vote while the true
- * reading confirms one pass (~350 ms) later.
+ * reading confirms one pass (~350 ms) later. The vote cannot catch junk that repeats every
+ * pass, so a guided pass with any exact name read discards its edit-tolerant hits: an aimed
+ * Island otherwise adopts "Lands" off its own type line ("Basic Land —" is one edit away)
+ * alongside the card itself.
  */
 final class CardIdentifier {
 
@@ -379,11 +382,26 @@ final class CardIdentifier {
             List<String> lines, List<SetLineHeuristics.SetAndNumber> pairs, boolean guided) {
         long now = SystemClock.elapsedRealtime();
         Set<String> names = new LinkedHashSet<>();
+        Set<String> exactNames = new LinkedHashSet<>();
         for (String line : lines) {
+            String exact = catalog.exactMatch(line);
+            if (exact != null) {
+                exactNames.add(exact);
+                names.add(exact);
+                continue;
+            }
             String name = catalog.bestMatch(line);
             if (name != null) {
                 names.add(name);
             }
+        }
+        if (guided && !exactNames.isEmpty()) {
+            // The box holds one card. When any line reads a name exactly, edit-tolerant hits
+            // from the other lines are junk — "Land" off the type line sits one edit from a
+            // real card name, and the upside-down read's noise does the same — so only the
+            // exact reads go forward. Tolerant matching still carries a pass where glare
+            // leaves no line exact.
+            names = exactNames;
         }
         for (String name : names) {
             if (guided) {

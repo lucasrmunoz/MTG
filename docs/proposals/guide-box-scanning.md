@@ -43,6 +43,13 @@ double the ambient cadence:
   printing — sticky until a manual rescan. A lone misread rarely repeats, so it loses the
   vote; the true reading repeats every pass and confirms ~350 ms later. Sightings expire with
   the same 5-second TTL as box names, so a re-aim starts a fresh vote.
+- **Exact reads silence tolerant ones:** the vote cannot catch junk that repeats every pass —
+  an aimed Island's own type line yields "Land", one edit from the playtest card "Lands", and
+  the upside-down read's noise landed one edit from "Stand" (a face of "Stand // Deliver"),
+  every pass, so both were adopted alongside the card itself. The box holds one card: when
+  any line reads a catalog name exactly (`CardNameCatalog.exactMatch`), the pass discards its
+  edit-tolerant hits and only exact reads go forward. A pass where glare leaves no line exact
+  still gets the tolerant match, so hard reads keep working.
 - **Confirmation:** the first time an aimed card confirms, the status line flashes
   "✓ Name — Set" with a haptic tap: aim, buzz, next card.
 
