@@ -10,6 +10,11 @@ import java.util.Map;
  * pass drops lone misreads, while the true reading, which every pass repeats, confirms one
  * pass later. Sightings expire so a re-aim starts a fresh vote.
  *
+ * Weak readings can also be held to a minimum sighting span: votes alone pass anything that
+ * reads stably for two consecutive passes, which the aim-settling window produces plenty of.
+ * A span requirement makes such a reading persist long enough for stronger evidence — the
+ * exactly-read title that suppresses it — to show up first.
+ *
  * Pure and unit-testable: the caller supplies the clock and reports each distinct reading
  * once per pass. Thread safety is internal.
  */
@@ -18,11 +23,12 @@ final class GuideConsensus {
     private final int agreeingPasses;
     private final long ttlMs;
 
-    /** Reading key → how many passes saw it and when it was last seen. */
+    /** Reading key → how many passes saw it and when it was first and last seen. */
     private final Map<String, Sighting> sightings = new LinkedHashMap<>();
 
     private static final class Sighting {
         int passes;
+        long firstSeenMs;
         long lastSeenMs;
     }
 
@@ -32,19 +38,20 @@ final class GuideConsensus {
     }
 
     /**
-     * Records that a pass saw this reading; true once enough passes agree and the reading
-     * has earned its lookup.
+     * Records that a pass saw this reading; true once enough passes agree and the sightings
+     * span at least {@code minSpanMs} — zero for readings trusted on votes alone.
      */
-    synchronized boolean confirm(String key, long nowMs) {
+    synchronized boolean confirm(String key, long nowMs, long minSpanMs) {
         sightings.values().removeIf(sighting -> nowMs - sighting.lastSeenMs > ttlMs);
         Sighting sighting = sightings.get(key);
         if (sighting == null) {
             sighting = new Sighting();
+            sighting.firstSeenMs = nowMs;
             sightings.put(key, sighting);
         }
         sighting.passes++;
         sighting.lastSeenMs = nowMs;
-        return sighting.passes >= agreeingPasses;
+        return sighting.passes >= agreeingPasses && nowMs - sighting.firstSeenMs >= minSpanMs;
     }
 
     /** Forgets every sighting — a fresh aim carries no votes over. */

@@ -46,7 +46,9 @@ import java.util.concurrent.ExecutorService;
  * reading confirms one pass (~350 ms) later. The vote cannot catch junk that repeats every
  * pass, so a guided pass with any exact name read discards its edit-tolerant hits: an aimed
  * Island otherwise adopts "Lands" off its own type line ("Basic Land —" is one edit away)
- * alongside the card itself.
+ * alongside the card itself. Junk that reads before the title ever does — the aim-settling
+ * window, where fragments resolve but the title is still blurred — is held to a minimum
+ * sighting span instead, long enough for the exact read to arrive and suppress it.
  */
 final class CardIdentifier {
 
@@ -137,6 +139,16 @@ final class CardIdentifier {
      * vote — it is dropped instead of adopted as the wrong printing.
      */
     private static final int GUIDE_AGREEING_PASSES = 2;
+
+    /**
+     * Non-exact readings — edit-tolerant catalog matches and fuzzy network titles — must
+     * also persist this long before adoption. While framing and focus settle, fragments
+     * read stably enough to win the pass vote ("Land" off a type line, blur that Scryfall's
+     * fuzzy endpoint resolves to a real card) while the title itself is not yet readable; by
+     * the time this span elapses, a readable title has appeared and suppresses them. Only a
+     * card whose title never reads exactly (foil glare) waits the full span.
+     */
+    private static final long TOLERANT_MIN_SPAN_MS = 1500;
 
     private final GuideConsensus guideConsensus =
             new GuideConsensus(GUIDE_AGREEING_PASSES, GUIDE_NAME_TTL_MS);
@@ -403,11 +415,14 @@ final class CardIdentifier {
             // leaves no line exact.
             names = exactNames;
         }
+        // Exact reads adopt on votes alone; a pass with only tolerant hits is the settling
+        // window's signature, so those must also outlast it.
+        long nameSpan = exactNames.isEmpty() ? TOLERANT_MIN_SPAN_MS : 0;
         for (String name : names) {
             if (guided) {
                 // Corroboration wants the freshest names even while the vote is still open.
                 rememberGuideName(name);
-                if (!guideConsensus.confirm("name:" + name.toLowerCase(), now)) {
+                if (!guideConsensus.confirm("name:" + name.toLowerCase(), now, nameSpan)) {
                     continue;
                 }
             }
@@ -418,6 +433,12 @@ final class CardIdentifier {
             for (String line : lines) {
                 String title = TitleHeuristics.clean(line);
                 if (title != null) {
+                    // The network fuzzy result cannot be voted on, so the title reading is:
+                    // settling blur mutates pass to pass and never confirms, costing nothing.
+                    if (guided && !guideConsensus.confirm(
+                            "fuzzy:" + title.toLowerCase(), now, TOLERANT_MIN_SPAN_MS)) {
+                        break;
+                    }
                     scheduleFuzzyLookup(title, guided);
                     break;
                 }
@@ -426,7 +447,7 @@ final class CardIdentifier {
 
         for (SetLineHeuristics.SetAndNumber pair : pairs) {
             if (guided && !guideConsensus.confirm(
-                    "printing:" + pair.setCode + "/" + pair.collectorNumber, now)) {
+                    "printing:" + pair.setCode + "/" + pair.collectorNumber, now, 0)) {
                 continue;
             }
             schedulePrintingLookup(pair, guided);

@@ -50,6 +50,13 @@ double the ambient cadence:
   any line reads a catalog name exactly (`CardNameCatalog.exactMatch`), the pass discards its
   edit-tolerant hits and only exact reads go forward. A pass where glare leaves no line exact
   still gets the tolerant match, so hard reads keep working.
+- **Weak evidence must outlast the settling window:** while the user frames the card and
+  focus settles, fragments read stably (two identical passes) before the title is readable —
+  which adopted "Hand to Hand" (settling blur through the previously unvoted Scryfall fuzzy
+  fallback) and "Lands" before "Island" ever read. Edit-tolerant matches and fuzzy titles now
+  also require sightings spanning 1.5 s; exact reads and collector lines keep the fast
+  two-pass vote. By the time the span elapses, a readable title has appeared and suppresses
+  the junk — only a card whose title never reads exactly (foil glare) waits the full span.
 - **Confirmation:** the first time an aimed card confirms, the status line flashes
   "✓ Name — Set" with a haptic tap: aim, buzz, next card.
 
