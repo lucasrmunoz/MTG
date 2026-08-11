@@ -116,20 +116,42 @@
             android:orientation="vertical"
             android:padding="12dp">
 
-            <!-- Who the panel is editing: the focused card's name or the focused player. -->
-            <TextView
-                android:id="@+id/ar_panel_title"
+            <!-- Header: who the panel is editing; tapping toggles collapsed and expanded. -->
+            <LinearLayout
+                android:id="@+id/ar_panel_header"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="6dp"
-                android:ellipsize="end"
-                android:maxLines="1"
-                android:textColor="@color/ar_orange"
-                android:textSize="15sp"
-                android:textStyle="bold"
-                android:visibility="gone" />
+                android:layout_marginBottom="2dp"
+                android:background="?android:attr/selectableItemBackground"
+                android:gravity="center_vertical"
+                android:minHeight="36dp"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/ar_panel_title"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:textColor="@color/ar_orange"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:visibility="invisible" />
+
+                <TextView
+                    android:id="@+id/ar_panel_expand"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="4dp"
+                    android:text="@string/ar_panel_expand"
+                    android:textColor="@color/ar_text_dim"
+                    android:textSize="14sp" />
+            </LinearLayout>
 
             <HorizontalScrollView
+                android:id="@+id/ar_chip_scroll"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:scrollbars="none">
@@ -210,6 +232,7 @@
             </LinearLayout>
 
             <LinearLayout
+                android:id="@+id/ar_action_row"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
@@ -256,15 +279,6 @@
                     style="@style/ArStepperButton"
                     android:text="@string/ar_tax_plus" />
             </LinearLayout>
-
-            <TextView
-                android:id="@+id/ar_hint_text"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="@string/ar_hint"
-                android:textColor="@color/ar_text_dim"
-                android:textSize="11sp" />
         </LinearLayout>
     </LinearLayout>
 </FrameLayout>

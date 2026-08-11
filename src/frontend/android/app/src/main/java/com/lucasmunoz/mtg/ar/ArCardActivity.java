@@ -144,10 +144,11 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     private TextView lifeLabel;
     private View lifeRow;
     private View statRow;
+    private View chipScroll;
+    private View actionRow;
     private View keywordButton;
     /** Game mode only: binds the focused scanned card to a player as their commander. */
     private View setCommanderButton;
-    private TextView hintText;
     private Button cardsToggle;
     private View cardListScroll;
     private LinearLayout cardList;
@@ -155,6 +156,11 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     private View panel;
     /** Names what the panel is editing: the focused card, or the focused player in game mode. */
     private TextView panelTitle;
+    /** The header chevron mirroring the panel's collapsed/expanded state. */
+    private TextView panelExpandChevron;
+    /** Two-stage panel: collapsed keeps only the essential row so the camera view stays clear
+     *  on small screens; tapping the header expands the full editor. Sticky for the session. */
+    private boolean panelExpanded;
 
     /** Non-null only in Commander game mode; the web layer owns it, this screen edits a copy. */
     private GameSession game;
@@ -239,9 +245,15 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         lifeLabel = findViewById(R.id.ar_life_label);
         lifeRow = findViewById(R.id.ar_life_row);
         statRow = findViewById(R.id.ar_stat_row);
+        chipScroll = findViewById(R.id.ar_chip_scroll);
+        actionRow = findViewById(R.id.ar_action_row);
         keywordButton = findViewById(R.id.ar_keyword);
         setCommanderButton = findViewById(R.id.ar_set_commander);
-        hintText = findViewById(R.id.ar_hint_text);
+        panelExpandChevron = findViewById(R.id.ar_panel_expand);
+        findViewById(R.id.ar_panel_header).setOnClickListener(v -> {
+            panelExpanded = !panelExpanded;
+            refreshCounterUi();
+        });
         cardsToggle = findViewById(R.id.ar_cards_toggle);
         cardListScroll = findViewById(R.id.ar_card_list_scroll);
         cardList = findViewById(R.id.ar_card_list);
@@ -332,10 +344,6 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
      * hands the web layer the freshest values.
      */
     private void enterGameMode() {
-        statRow.setVisibility(View.GONE);
-        keywordButton.setVisibility(View.GONE);
-        lifeRow.setVisibility(View.VISIBLE);
-        hintText.setText(R.string.ar_game_hint);
         publishGameResult();
         for (GamePlayer player : game.players()) {
             // Every player gets a life token in the tray, commander or not — life stays
@@ -1392,19 +1400,14 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
 
     /** Rebuilds the focused card's tappable chip row and re-stamps its overlay chips. */
     private void refreshCounterUi() {
-        if (game != null) {
-            // The panel follows the focused target: a player (via commander or token) gets the
-            // life/tax rows, a scanned table card gets the normal counter controls plus the
-            // option to become someone's commander.
-            boolean gameTarget = focusedPlayerId >= 0;
-            lifeRow.setVisibility(gameTarget ? View.VISIBLE : View.GONE);
-            statRow.setVisibility(gameTarget ? View.GONE : View.VISIBLE);
-            keywordButton.setVisibility(gameTarget ? View.GONE : View.VISIBLE);
-            setCommanderButton.setVisibility(gameTarget ? View.GONE : View.VISIBLE);
-            if (gameTarget) {
-                refreshGameUi();
-                return;
-            }
+        // The panel follows the focused target: a player (via commander or token) gets the
+        // life/tax rows, a scanned table card gets the normal counter controls plus the
+        // option to become someone's commander.
+        boolean gameTarget = game != null && focusedPlayerId >= 0;
+        applyPanelRows(gameTarget);
+        if (gameTarget) {
+            refreshGameUi();
+            return;
         }
         CardCounters counters = focusedCounters();
         chipRow.removeAllViews();
@@ -1441,6 +1444,23 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         if (card != null) {
             pushCounterChips(card);
         }
+    }
+
+    /**
+     * Collapsed, the panel is its header plus the essential row — the life stepper for a
+     * player, the counter chips for a card — keeping the camera view clear on small screens.
+     * Expanded (via the header) it adds the stat buttons and the keyword/commander/tax row.
+     */
+    private void applyPanelRows(boolean gameTarget) {
+        panelExpandChevron.setText(panelExpanded
+                ? R.string.ar_panel_collapse : R.string.ar_panel_expand);
+        lifeRow.setVisibility(gameTarget ? View.VISIBLE : View.GONE);
+        chipScroll.setVisibility(gameTarget && !panelExpanded ? View.GONE : View.VISIBLE);
+        statRow.setVisibility(!gameTarget && panelExpanded ? View.VISIBLE : View.GONE);
+        actionRow.setVisibility(panelExpanded ? View.VISIBLE : View.GONE);
+        keywordButton.setVisibility(gameTarget ? View.GONE : View.VISIBLE);
+        setCommanderButton.setVisibility(
+                game != null && !gameTarget ? View.VISIBLE : View.GONE);
     }
 
     /** Picks which player the focused scanned card belongs to as their commander. */
@@ -1569,7 +1589,8 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
 
     private void setPanelTitle(String title) {
         if (title == null || title.isEmpty()) {
-            panelTitle.setVisibility(View.GONE);
+            // Invisible, not gone: the header keeps its height and the chevron stays put.
+            panelTitle.setVisibility(View.INVISIBLE);
         } else {
             panelTitle.setText(title);
             panelTitle.setVisibility(View.VISIBLE);
