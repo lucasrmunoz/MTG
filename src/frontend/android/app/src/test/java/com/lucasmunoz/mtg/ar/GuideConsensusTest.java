@@ -57,6 +57,29 @@ public class GuideConsensusTest {
     }
 
     @Test
+    public void freshRivalIsSeenAndStaleRivalIsNot() {
+        GuideConsensus consensus = new GuideConsensus(2, 5000);
+        consensus.confirm("name:stand // deliver", 0, 1200);
+        consensus.confirm("name:island", 350, 1200);
+        // From island's view at 700, the rival was seen 700 ms ago — inside a 1000 ms hold.
+        assertTrue(consensus.rivalSeenSince("name:", "name:island", 700 - 1000, 700));
+        // By 1600 that sighting is 1600 ms old — stale, island stands alone.
+        assertFalse(consensus.rivalSeenSince("name:", "name:island", 1600 - 1000, 1600));
+    }
+
+    @Test
+    public void rivalCheckIgnoresSelfOtherPrefixesAndExpiredSightings() {
+        GuideConsensus consensus = new GuideConsensus(2, 5000);
+        consensus.confirm("name:island", 0, 0);
+        consensus.confirm("printing:spm/195", 0, 0);
+        assertFalse(consensus.rivalSeenSince("name:", "name:island", -1000, 0));
+        consensus.confirm("name:stand // deliver", 100, 0);
+        assertTrue(consensus.rivalSeenSince("name:", "name:island", 0, 200));
+        // Past the 5 s TTL the rival's sighting is gone entirely.
+        assertFalse(consensus.rivalSeenSince("name:", "name:island", 0, 6000));
+    }
+
+    @Test
     public void staleSightingsExpireIntoAFreshVote() {
         GuideConsensus consensus = new GuideConsensus(2, 5000);
         assertFalse(consensus.confirm("name:island", 0, 0));

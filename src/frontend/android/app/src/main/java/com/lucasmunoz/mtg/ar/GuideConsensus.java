@@ -54,6 +54,25 @@ final class GuideConsensus {
         return sighting.passes >= agreeingPasses && nowMs - sighting.firstSeenMs >= minSpanMs;
     }
 
+    /**
+     * True when any live reading under the prefix other than {@code selfKey} was seen at or
+     * after {@code sinceMs}. In a one-card context a fresh rival reading means the box's
+     * winner is not settled yet — the rival may be the true title and self the misread.
+     */
+    synchronized boolean rivalSeenSince(String prefix, String selfKey, long sinceMs,
+            long nowMs) {
+        sightings.values().removeIf(sighting -> nowMs - sighting.lastSeenMs > ttlMs);
+        for (Map.Entry<String, Sighting> entry : sightings.entrySet()) {
+            if (!entry.getKey().startsWith(prefix) || entry.getKey().equals(selfKey)) {
+                continue;
+            }
+            if (entry.getValue().lastSeenMs >= sinceMs) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** Forgets every sighting — a fresh aim carries no votes over. */
     synchronized void reset() {
         sightings.clear();

@@ -57,6 +57,13 @@ double the ambient cadence:
   also require sightings spanning 1.5 s; exact reads and collector lines keep the fast
   two-pass vote. By the time the span elapses, a readable title has appeared and suppresses
   the junk — only a card whose title never reads exactly (foil glare) waits the full span.
+- **Exact names adopt under arbitration, not first-to-two:** a blurred "Island" reads as
+  literally "stand" — an exact face-name hit for Stand // Deliver — often enough to win a
+  first-to-two-votes race during settling. An exact name now adopts only after its sightings
+  span ~1.2 s (three to four passes) *and* no other name has been read in the last second:
+  the true title reads on nearly every pass, so it keeps a sporadic misread held forever,
+  while the misread goes stale within the window and releases the truth. A clean scan
+  confirms at ~1.2 s instead of ~0.7 s.
 - **A recent exact read silences weaker tiers across passes:** the live trace showed title
   fragments ("land") adopting a fuzzy junk card two seconds *after* the title itself had read
   exactly — per-pass suppression cannot see neighbouring passes. For the 5-second guide TTL

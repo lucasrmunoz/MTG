@@ -152,6 +152,22 @@ final class CardIdentifier {
      */
     private static final long TOLERANT_MIN_SPAN_MS = 1500;
 
+    /**
+     * Even an exact name must persist this long — three to four passes — before adoption.
+     * Two quick votes are not proof: a blurred "Island" reads as literally "stand" (an exact
+     * face-name hit for a split card) often enough to win a first-to-two race during
+     * settling, while the true title reads on nearly every pass and easily outlasts this.
+     */
+    private static final long EXACT_MIN_SPAN_MS = 1200;
+
+    /**
+     * An exact name adopts only once no other name has been read this recently. A fresh
+     * rival reading means the box's winner is not settled — the rival may be the true title
+     * and this name the misread; the true title keeps reading and keeps the junk held while
+     * a sporadic misread goes stale within this window and releases the truth.
+     */
+    private static final long RIVAL_HOLD_MS = 1000;
+
     private final GuideConsensus guideConsensus =
             new GuideConsensus(GUIDE_AGREEING_PASSES, GUIDE_NAME_TTL_MS);
 
@@ -445,9 +461,9 @@ final class CardIdentifier {
         // its fragments fall through to tolerant or fuzzy junk.
         boolean exactReadRecently = guided && !exactPass
                 && lastExactReadMs != 0 && now - lastExactReadMs < GUIDE_NAME_TTL_MS;
-        // Exact reads adopt on votes alone; a pass with only tolerant hits is the settling
-        // window's signature, so those must also outlast it.
-        long nameSpan = exactPass ? 0 : TOLERANT_MIN_SPAN_MS;
+        // A pass with only tolerant hits is the settling window's signature, so those wait
+        // out the longer span; exact reads wait a shorter one plus a clear-of-rivals check.
+        long nameSpan = exactPass ? EXACT_MIN_SPAN_MS : TOLERANT_MIN_SPAN_MS;
         for (String name : names) {
             if (guided) {
                 if (exactReadRecently) {
@@ -455,7 +471,12 @@ final class CardIdentifier {
                 }
                 // Corroboration wants the freshest names even while the vote is still open.
                 rememberGuideName(name);
-                if (!guideConsensus.confirm("name:" + name.toLowerCase(), now, nameSpan)) {
+                String key = "name:" + name.toLowerCase();
+                if (!guideConsensus.confirm(key, now, nameSpan)) {
+                    continue;
+                }
+                if (exactPass && guideConsensus.rivalSeenSince(
+                        "name:", key, now - RIVAL_HOLD_MS, now)) {
                     continue;
                 }
             }
