@@ -306,13 +306,21 @@ final class CardIdentifier {
         InputImage flipped = InputImage.fromBitmap(crop, FLIPPED_ROTATION_DEGREES);
         recognizer.process(upright)
                 .addOnSuccessListener(text -> collectLines(text, lines))
-                .addOnCompleteListener(first -> recognizer.process(flipped)
-                        .addOnSuccessListener(text -> collectLines(text, lines))
-                        .addOnCompleteListener(second -> {
-                            crop.recycle();
-                            finishGuidedPass(lines);
-                            recognizing = false;
-                        }));
+                .addOnCompleteListener(first -> {
+                    int uprightCount = lines.size();
+                    recognizer.process(flipped)
+                            .addOnSuccessListener(text -> collectLines(text, lines))
+                            .addOnCompleteListener(second -> {
+                                crop.recycle();
+                                if (!lines.isEmpty() && Log.isLoggable(TAG, Log.DEBUG)) {
+                                    Log.d(TAG, "Guide pass upright="
+                                            + lines.subList(0, uprightCount) + " flipped="
+                                            + lines.subList(uprightCount, lines.size()));
+                                }
+                                finishGuidedPass(lines);
+                                recognizing = false;
+                            });
+                });
     }
 
     private static void collectLines(Text text, List<String> lines) {
@@ -414,6 +422,9 @@ final class CardIdentifier {
             // exact reads go forward. Tolerant matching still carries a pass where glare
             // leaves no line exact.
             names = exactNames;
+        }
+        if (guided && !names.isEmpty() && Log.isLoggable(TAG, Log.DEBUG)) {
+            Log.d(TAG, "Guide resolve exact=" + exactNames + " going forward=" + names);
         }
         // Exact reads adopt on votes alone; a pass with only tolerant hits is the settling
         // window's signature, so those must also outlast it.
@@ -533,6 +544,8 @@ final class CardIdentifier {
                 snapshot = addMatch(card, exact);
             }
             if (snapshot != null) {
+                // The key names the evidence tier (name:/title:/printing:) for diagnosis.
+                Log.i(TAG, "Adopted " + card.name + " via " + key);
                 listener.onCandidates(snapshot);
             }
         } catch (IOException e) {
