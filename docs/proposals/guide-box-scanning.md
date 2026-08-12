@@ -57,6 +57,12 @@ double the ambient cadence:
   also require sightings spanning 1.5 s; exact reads and collector lines keep the fast
   two-pass vote. By the time the span elapses, a readable title has appeared and suppresses
   the junk — only a card whose title never reads exactly (foil glare) waits the full span.
+- **A recent exact read silences weaker tiers across passes:** the live trace showed title
+  fragments ("land") adopting a fuzzy junk card two seconds *after* the title itself had read
+  exactly — per-pass suppression cannot see neighbouring passes. For the 5-second guide TTL
+  after any exact read, a pass that fails to re-read the title yields nothing: no tolerant
+  adoption, no fuzzy fallback. A genuinely unreadable title (foil glare) never reads exactly,
+  so the fallback tiers still serve it.
 - **Confirmation:** the first time an aimed card confirms, the status line flashes
   "✓ Name — Set" with a haptic tap: aim, buzz, next card.
 

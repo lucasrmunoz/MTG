@@ -48,7 +48,9 @@ import java.util.concurrent.ExecutorService;
  * Island otherwise adopts "Lands" off its own type line ("Basic Land —" is one edit away)
  * alongside the card itself. Junk that reads before the title ever does — the aim-settling
  * window, where fragments resolve but the title is still blurred — is held to a minimum
- * sighting span instead, long enough for the exact read to arrive and suppress it.
+ * sighting span instead, long enough for the exact read to arrive and suppress it. And once
+ * a title has read exactly, the suppression holds across passes: for the guide TTL, a pass
+ * that fails to re-read it yields nothing instead of falling back to weaker tiers.
  */
 final class CardIdentifier {
 
@@ -153,6 +155,15 @@ final class CardIdentifier {
     private final GuideConsensus guideConsensus =
             new GuideConsensus(GUIDE_AGREEING_PASSES, GUIDE_NAME_TTL_MS);
 
+    /**
+     * When a guided pass last read any name exactly, or 0 before the first. While this is
+     * fresh (within the guide-name TTL), passes that fail to re-read the title yield nothing
+     * instead of falling back to weaker tiers: the trace showed "land" fragments adopting a
+     * fuzzy junk card two seconds after the title itself had been read exactly. Volatile —
+     * written on the lookup thread, reset from the UI thread by {@link #setGuideBox}.
+     */
+    private volatile long lastExactReadMs;
+
     /** One recognised card, remembering whether it came from the exact collector line. */
     private static final class Match {
         final ScryfallLookup.CardSummary card;
@@ -191,6 +202,7 @@ final class CardIdentifier {
     void setGuideBox(float[] viewBox) {
         this.guideBox = viewBox;
         guideConsensus.reset();
+        lastExactReadMs = 0;
         synchronized (this) {
             // Either direction is a fresh aim; names from before the toggle prove nothing.
             guideNamesSeenAtMs.clear();
@@ -415,22 +427,32 @@ final class CardIdentifier {
                 names.add(name);
             }
         }
-        if (guided && !exactNames.isEmpty()) {
+        boolean exactPass = !exactNames.isEmpty();
+        if (guided && exactPass) {
             // The box holds one card. When any line reads a name exactly, edit-tolerant hits
             // from the other lines are junk — "Land" off the type line sits one edit from a
             // real card name, and the upside-down read's noise does the same — so only the
             // exact reads go forward. Tolerant matching still carries a pass where glare
             // leaves no line exact.
             names = exactNames;
+            lastExactReadMs = now;
         }
         if (guided && !names.isEmpty() && Log.isLoggable(TAG, Log.DEBUG)) {
             Log.d(TAG, "Guide resolve exact=" + exactNames + " going forward=" + names);
         }
+        // A recent exact read silences weaker tiers across passes, not just within one: a
+        // pass that fails to re-read an exactly-read title yields nothing rather than letting
+        // its fragments fall through to tolerant or fuzzy junk.
+        boolean exactReadRecently = guided && !exactPass
+                && lastExactReadMs != 0 && now - lastExactReadMs < GUIDE_NAME_TTL_MS;
         // Exact reads adopt on votes alone; a pass with only tolerant hits is the settling
         // window's signature, so those must also outlast it.
-        long nameSpan = exactNames.isEmpty() ? TOLERANT_MIN_SPAN_MS : 0;
+        long nameSpan = exactPass ? 0 : TOLERANT_MIN_SPAN_MS;
         for (String name : names) {
             if (guided) {
+                if (exactReadRecently) {
+                    break;
+                }
                 // Corroboration wants the freshest names even while the vote is still open.
                 rememberGuideName(name);
                 if (!guideConsensus.confirm("name:" + name.toLowerCase(), now, nameSpan)) {
@@ -440,12 +462,12 @@ final class CardIdentifier {
             scheduleNameLookup(name, guided);
         }
 
-        if (names.isEmpty() && (guided || !catalog.isReady())) {
+        if (names.isEmpty() && !exactReadRecently && (guided || !catalog.isReady())) {
             for (String line : lines) {
                 String title = TitleHeuristics.clean(line);
                 if (title != null) {
                     // The network fuzzy result cannot be voted on, so the title reading is:
-                    // settling blur mutates pass to pass and never confirms, costing nothing.
+                    // it must repeat and outlast the settling window before Scryfall is asked.
                     if (guided && !guideConsensus.confirm(
                             "fuzzy:" + title.toLowerCase(), now, TOLERANT_MIN_SPAN_MS)) {
                         break;
