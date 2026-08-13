@@ -25,6 +25,13 @@ import type { ArtVersion, Card, CardSearchResult, VendorInfo } from "@/lib/types
 /** How often to re-check whether the cached vendor catalogue has finished downloading. */
 const VENDOR_POLL_MS = 10_000;
 
+/**
+ * How often to re-read vendor metadata once every catalogue is loaded. The backend re-downloads
+ * cached catalogues hourly, so without this the "as of Xm ago" label would age forever from the
+ * first fetch. Each poll also re-renders, which is what keeps the minute count itself ticking.
+ */
+const VENDOR_METADATA_REFRESH_MS = 5 * 60_000;
+
 export default function Home() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<CardSearchResult | null>(null);
@@ -51,30 +58,35 @@ export default function Home() {
   const requestIdRef = useRef(0);
 
   // Card Kingdom publishes no per-card endpoint, so its catalogue is downloaded in the background
-  // and its prices appear shortly after startup. Poll until it reports loaded, then stop.
+  // and its prices appear shortly after startup. Poll fast until it reports loaded, then keep
+  // polling slowly so the freshness label tracks the backend's hourly re-downloads.
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     async function loadVendors() {
-      let list: VendorInfo[];
+      let list: VendorInfo[] | null = null;
       try {
         list = await fetchVendors();
       } catch {
-        // The page is still usable without vendor metadata; prices simply render as dashes.
-        return;
+        // The page is still usable without vendor metadata; prices simply render as dashes, and
+        // the next poll retries.
       }
 
       if (cancelled) {
         return;
       }
 
-      setVendors(list);
-      setVendorId((current) => (current === "" ? (list[0]?.id ?? "") : current));
-
-      if (list.some((vendor) => !vendor.loaded)) {
-        timer = setTimeout(() => void loadVendors(), VENDOR_POLL_MS);
+      if (list !== null) {
+        setVendors(list);
+        setVendorId((current) => (current === "" ? (list[0]?.id ?? "") : current));
       }
+
+      const stillDownloading = list === null || list.some((vendor) => !vendor.loaded);
+      timer = setTimeout(
+        () => void loadVendors(),
+        stillDownloading ? VENDOR_POLL_MS : VENDOR_METADATA_REFRESH_MS,
+      );
     }
 
     void loadVendors();
