@@ -24,6 +24,7 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
+app.UseCors(CorsPolicy);
 app.UseExceptionHandler();
 app.UseStatusCodePages();
 
@@ -31,8 +32,6 @@ if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
-
-app.UseCors(CorsPolicy);
 
 app.MapCardEndpoints();
 
