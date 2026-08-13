@@ -19,5 +19,19 @@
     "severity": "normal",
     "dismissedAt": "2026-08-10T20:10:17.760Z",
     "dismissedAtContentSha": "a8239c6d7eefab06f5ecd62849cf46395a5690f3a3c05a3d5c498501c9fde357"
+  },
+  {
+    "fingerprint": "6f734d404990f16ab87910c69e8ac473bce19d9a",
+    "kind": "logic",
+    "severity": "lfr",
+    "dismissedAt": "2026-08-13T19:07:54.898Z",
+    "dismissedAtContentSha": "9384560ea297dfd167773f6ed146ddc20809e65c3f89cbff4791db83a23f8a8d"
+  },
+  {
+    "fingerprint": "c0134c5669c3e7b085a957d7681dd76eb12c65c0",
+    "kind": "logic",
+    "severity": "lfr",
+    "dismissedAt": "2026-08-13T20:14:36.422Z",
+    "dismissedAtContentSha": "d70a8826ecf825faedb14aedb268d57f438b320f58d08cd5f255cefcf54d5e91"
   }
 ]
