@@ -78,6 +78,7 @@ internal static class ScryfallCardMapper
     /// <summary>Scryfall quotes prices as decimal strings, and omits them entirely when unknown.</summary>
     private static decimal? ParsePrice(string? value) =>
         decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed)
+        && parsed > 0
             ? parsed
             : null;
 

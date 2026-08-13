@@ -117,7 +117,7 @@ function parsePrice(value: string | null | undefined): number | null {
     return null;
   }
   const parsed = Number.parseFloat(value);
-  return Number.isFinite(parsed) ? parsed : null;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 function tcgplayerPrices(card: ScryfallCard): Record<string, VendorPrice> {
