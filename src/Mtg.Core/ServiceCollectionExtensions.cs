@@ -20,6 +20,9 @@ public static class ServiceCollectionExtensions
     /// <summary>Bulk catalogues run to tens of megabytes, so they need far longer than a card lookup.</summary>
     private static readonly TimeSpan PriceFeedTimeout = TimeSpan.FromMinutes(10);
 
+    /// <summary>Live vendors sit on the card search path, so a hung one must give up quickly.</summary>
+    private static readonly TimeSpan LivePriceTimeout = TimeSpan.FromSeconds(15);
+
     /// <summary>
     /// Registers <see cref="ScryfallClient"/> as a typed HTTP client.
     /// </summary>
@@ -64,7 +67,7 @@ public static class ServiceCollectionExtensions
     private static void AddLiveSource<TSource>(IServiceCollection services)
         where TSource : class, ILivePriceSource
     {
-        services.AddHttpClient<TSource>(ConfigureVendorClient);
+        services.AddHttpClient<TSource>(client => ConfigureVendorClient(client, LivePriceTimeout));
         services.AddScoped<ILivePriceSource>(provider => provider.GetRequiredService<TSource>());
     }
 
@@ -75,13 +78,13 @@ public static class ServiceCollectionExtensions
     private static void AddFeed<TFeed>(IServiceCollection services)
         where TFeed : class, IPriceFeed
     {
-        services.AddHttpClient<TFeed>(ConfigureVendorClient);
+        services.AddHttpClient<TFeed>(client => ConfigureVendorClient(client, PriceFeedTimeout));
         services.AddSingleton<IPriceFeed>(provider => provider.GetRequiredService<TFeed>());
     }
 
-    private static void ConfigureVendorClient(HttpClient client)
+    private static void ConfigureVendorClient(HttpClient client, TimeSpan timeout)
     {
-        client.Timeout = PriceFeedTimeout;
+        client.Timeout = timeout;
         client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent);
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
     }
