@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { SearchForm } from "@/components/SearchForm";
 import { SearchResults } from "@/components/SearchResults";
 import { fetchArtVersions, searchCards } from "@/lib/api";
@@ -33,10 +33,55 @@ export function CommanderPicker({ player, onPick, onClose }: CommanderPickerProp
   // Same guard as the lookup page: a slow earlier response must not overwrite a later one.
   const requestIdRef = useRef(0);
 
+  const headingId = useId();
+  const overlayRef = useRef<HTMLDivElement>(null);
+
+  function focusableElements(overlay: HTMLDivElement): HTMLElement[] {
+    return Array.from(
+      overlay.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    );
+  }
+
+  // Modal focus management: move focus into the dialog on open, give it back to the
+  // opener on close. The opener is whatever was focused when the overlay mounted.
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const overlay = overlayRef.current;
+    if (overlay !== null) {
+      (focusableElements(overlay)[0] ?? overlay).focus();
+    }
+    return () => opener?.focus();
+  }, []);
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         onClose();
+        return;
+      }
+      // Trap Tab inside the overlay: the board underneath is still in the DOM, and
+      // tabbing into it would silently drop a keyboard user out of the dialog.
+      if (event.key !== "Tab") {
+        return;
+      }
+      const overlay = overlayRef.current;
+      if (overlay === null) {
+        return;
+      }
+      const focusables = focusableElements(overlay);
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (first === undefined || last === undefined) {
+        event.preventDefault();
+        return;
+      }
+      const active = document.activeElement;
+      const activeInOverlay = active instanceof HTMLElement && overlay.contains(active);
+      if (event.shiftKey ? active === first || !activeInOverlay : active === last || !activeInOverlay) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
       }
     }
     window.addEventListener("keydown", onKeyDown);
@@ -106,10 +151,19 @@ export function CommanderPicker({ player, onPick, onClose }: CommanderPickerProp
   }
 
   return (
-    <div className="fixed inset-0 z-40 overflow-y-auto bg-background-deep/95 backdrop-blur-sm p-4 sm:p-6">
+    <div
+      ref={overlayRef}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={headingId}
+      tabIndex={-1}
+      className="fixed inset-0 z-40 overflow-y-auto bg-background-deep/95 backdrop-blur-sm p-4 sm:p-6"
+    >
       <div className="mx-auto max-w-3xl rise">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <h2 className="section-title">Commander for {player.name}</h2>
+          <h2 id={headingId} className="section-title">
+            Commander for {player.name}
+          </h2>
           <div className="flex gap-2">
             {player.commander !== null && (
               <button
