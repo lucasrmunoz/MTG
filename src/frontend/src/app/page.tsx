@@ -22,6 +22,9 @@ import type { ColorMatchMode } from "@/lib/colors";
 import { matchesFinish, priceFor, type Finish } from "@/lib/pricing";
 import type { ArtVersion, Card, CardSearchResult, VendorInfo } from "@/lib/types";
 
+/** The game tracker ships only in the app build, so the web build hides its entry link. */
+const isMobileApp = process.env.NEXT_PUBLIC_MOBILE_APP === "true";
+
 /** How often to re-check whether the cached vendor catalogue has finished downloading. */
 const VENDOR_POLL_MS = 10_000;
 
@@ -379,11 +382,13 @@ export default function Home() {
               onRandom={(colors, mode) => void handleRandomCard(colors, mode)}
             />
 
-            <div className="mb-6 sm:mb-8 flex flex-wrap gap-3">
-              <Link href="/game" className="btn btn-ghost">
-                Commander game
-              </Link>
-            </div>
+            {isMobileApp && (
+              <div className="mb-6 sm:mb-8 flex flex-wrap gap-3">
+                <Link href="/game" className="btn btn-ghost">
+                  Commander game
+                </Link>
+              </div>
+            )}
 
             {error !== null && (
               <div className="banner-error p-4 mb-8">{error}</div>

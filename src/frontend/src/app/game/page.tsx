@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { CommanderPicker } from "@/components/CommanderPicker";
 import { GameBoard } from "@/components/GameBoard";
@@ -26,6 +27,9 @@ import {
   type ReminderPhase,
 } from "@/lib/game";
 
+/** The game tracker ships only in the app build; on the web this route is a 404. */
+const isMobileApp = process.env.NEXT_PUBLIC_MOBILE_APP === "true";
+
 /** The one saved game. Versioned inside the payload, not the key. */
 const STORAGE_KEY = "mtg.game.v1";
 
@@ -33,6 +37,10 @@ const STORAGE_KEY = "mtg.game.v1";
 const CONFIRM_RESET_MS = 2500;
 
 export default function GamePage() {
+  if (!isMobileApp) {
+    notFound();
+  }
+
   const [game, setGame] = useState<GameState | null>(null);
   // Gates the persistence effect until the saved game has been read back, so the initial null
   // state cannot wipe a save the page simply has not restored yet.
