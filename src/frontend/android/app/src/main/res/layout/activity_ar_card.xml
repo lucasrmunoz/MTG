@@ -281,4 +281,11 @@
             </LinearLayout>
         </LinearLayout>
     </LinearLayout>
+
+    <!-- Topmost, over the panel too; invisible (not gone) so it is laid out before show(). -->
+    <com.lucasmunoz.mtg.ar.KeywordWheelView
+        android:id="@+id/ar_keyword_wheel"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="invisible" />
 </FrameLayout>

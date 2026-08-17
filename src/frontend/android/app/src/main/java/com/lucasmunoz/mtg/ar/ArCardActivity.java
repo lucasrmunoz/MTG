@@ -138,6 +138,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
 
     private GLSurfaceView surfaceView;
     private CardOverlayView overlay;
+    private KeywordWheelView keywordWheel;
     private TextView statusText;
     private LinearLayout chipRow;
     private TextView taxLabel;
@@ -272,6 +273,31 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         panelTitle = findViewById(R.id.ar_panel_title);
         overlay = findViewById(R.id.ar_overlay);
         overlay.setListener(this);
+        keywordWheel = findViewById(R.id.ar_keyword_wheel);
+        keywordWheel.setListener(new KeywordWheelView.Listener() {
+            @Override
+            public void onEntrySelected(KeywordWheelView.Entry entry) {
+                CardCounters counters = focusedCounters();
+                if (counters == null) {
+                    return;
+                }
+                if (entry.custom) {
+                    showCustomKeywordDialog();
+                    return;
+                }
+                if (entry.active) {
+                    counters.removeKeyword(entry.label);
+                } else {
+                    counters.addKeyword(entry.label);
+                }
+                persistAndRefresh();
+            }
+
+            @Override
+            public void onDismissed() {
+                overlay.setTouchRelay(null);
+            }
+        });
 
         surfaceView = findViewById(R.id.ar_surface);
         surfaceView.setPreserveEGLContextOnPause(true);
@@ -969,6 +995,11 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     }
 
     @Override
+    public void onCardLongPressed(String key, float x, float y) {
+        showKeywordWheel(x, y, true);
+    }
+
+    @Override
     public void onTokenTapped(int playerId) {
         if (game == null) {
             return;
@@ -1210,7 +1241,8 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         wireStatButton(R.id.ar_stat_pm, 1, -1);
         wireStatButton(R.id.ar_stat_mp, -1, 1);
         findViewById(R.id.ar_stat_custom).setOnClickListener(v -> showCustomStatDialog());
-        findViewById(R.id.ar_keyword).setOnClickListener(v -> showKeywordDialog());
+        findViewById(R.id.ar_keyword).setOnClickListener(v ->
+                showKeywordWheel(overlay.getWidth() / 2f, overlay.getHeight() / 2f, false));
         findViewById(R.id.ar_set_commander).setOnClickListener(v -> {
             ActiveCard card = focusedKey == null ? null : cardsByKey.get(focusedKey);
             if (game != null && card != null && !isGameCard(card.key)) {
@@ -1315,27 +1347,54 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         return picker;
     }
 
-    private void showKeywordDialog() {
-        String[] presets = getResources().getStringArray(R.array.ar_keyword_presets);
-        String[] options = new String[presets.length + 1];
-        System.arraycopy(presets, 0, options, 0, presets.length);
-        options[presets.length] = getString(R.string.ar_keyword_custom);
+    /**
+     * Opens the radial keyword picker around (x, y). Presets already on the card as counters
+     * come up highlighted (selecting removes them); printed keywords come up muted and inert.
+     * With {@code midGesture} the opening long-press still owns the touch stream, so the
+     * overlay relays it to the wheel for drag-and-release selection.
+     */
+    private void showKeywordWheel(float x, float y, boolean midGesture) {
+        CardCounters counters = focusedCounters();
+        ActiveCard card = focusedKey == null ? null : cardsByKey.get(focusedKey);
+        if (counters == null || card == null) {
+            return; // Commanders carry player life, not counters — no wheel for them.
+        }
+        List<KeywordWheelView.Entry> entries = new ArrayList<>();
+        for (String preset : getResources().getStringArray(R.array.ar_keyword_presets)) {
+            entries.add(new KeywordWheelView.Entry(preset,
+                    containsIgnoreCase(counters.keywords, preset),
+                    containsIgnoreCase(card.keywords, preset),
+                    false));
+        }
+        entries.add(new KeywordWheelView.Entry(
+                getString(R.string.ar_keyword_custom), false, false, true));
+        keywordWheel.show(x, y, entries, midGesture);
+        if (keywordWheel.isShowing()) {
+            // Only relay touches once the wheel is really up — a bailed show() with the relay
+            // set would swallow every touch into an invisible view.
+            overlay.setTouchRelay(keywordWheel);
+            overlay.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+        }
+    }
 
-        new AlertDialog.Builder(this)
-                .setTitle(R.string.ar_keyword_title)
-                .setItems(options, (dialog, which) -> {
-                    CardCounters counters = focusedCounters();
-                    if (counters == null) {
-                        return;
-                    }
-                    if (which < presets.length) {
-                        counters.addKeyword(presets[which]);
-                        persistAndRefresh();
-                    } else {
-                        showCustomKeywordDialog();
-                    }
-                })
-                .show();
+    private static boolean containsIgnoreCase(List<String> list, String value) {
+        for (String item : list) {
+            if (item.equalsIgnoreCase(value)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Deprecated in favour of predictive back, which this plain Activity does not opt into. */
+    @SuppressWarnings("deprecation")
+    @Override
+    public void onBackPressed() {
+        if (keywordWheel.isShowing()) {
+            keywordWheel.hide();
+            return;
+        }
+        super.onBackPressed();
     }
 
     private void showCustomKeywordDialog() {

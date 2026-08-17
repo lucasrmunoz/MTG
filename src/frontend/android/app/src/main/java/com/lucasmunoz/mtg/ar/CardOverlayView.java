@@ -88,6 +88,9 @@ public final class CardOverlayView extends View {
         /** A tap hit no card: a chance to place a pending card at this screen point. */
         void onTapEmpty(float x, float y);
 
+        /** A long-press landed on a card (now focused): the keyword wheel should open there. */
+        default void onCardLongPressed(String key, float x, float y) {}
+
         /** Game mode: a life token was tapped — its player should become the focused one. */
         default void onTokenTapped(int playerId) {}
 
@@ -134,6 +137,9 @@ public final class CardOverlayView extends View {
     private volatile List<TokenPose> tokenPoses = Collections.emptyList();
     private volatile String focusedKey;
     private Listener listener;
+    /** While the keyword wheel is up, every touch — including the in-flight long-press that
+     *  opened it — feeds the wheel instead of the card gestures. */
+    private View touchRelay;
 
     private final Map<Integer, TokenState> tokens = new ConcurrentHashMap<>();
     /** Draw/tray order for tokens, by player id, so the tray is stable. */
@@ -239,11 +245,20 @@ public final class CardOverlayView extends View {
                 handleTap(event.getX(), event.getY());
                 return true;
             }
+
+            @Override
+            public void onLongPress(MotionEvent event) {
+                handleLongPress(event.getX(), event.getY());
+            }
         });
     }
 
     void setListener(Listener listener) {
         this.listener = listener;
+    }
+
+    void setTouchRelay(View relay) {
+        touchRelay = relay;
     }
 
     /** Creates or updates a card's scan; a null bitmap registers the card before art arrives. */
@@ -343,6 +358,10 @@ public final class CardOverlayView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        View relay = touchRelay;
+        if (relay != null && relay.onTouchEvent(event)) {
+            return true;
+        }
         // Tokens take priority over card gestures: a touch starting on one becomes a drag (or a
         // tap when the finger never really moves), and the pinch/tap detectors sit that one out.
         switch (event.getActionMasked()) {
@@ -444,6 +463,27 @@ public final class CardOverlayView extends View {
         }
         if (listener != null) {
             listener.onTapEmpty(x, y);
+        }
+    }
+
+    /** Focus the pressed card if it wasn't, then hand it to the activity for the keyword wheel. */
+    private void handleLongPress(float x, float y) {
+        for (CardPose pose : poses) {
+            RenderState state = renders.get(pose.key);
+            if (state == null || state.bitmap == null || !state.lastRect.contains(x, y)) {
+                continue;
+            }
+            if (!pose.key.equals(focusedKey)) {
+                focusedKey = pose.key;
+                invalidate();
+                if (listener != null) {
+                    listener.onFocusChanged(pose.key);
+                }
+            }
+            if (listener != null) {
+                listener.onCardLongPressed(pose.key, x, y);
+            }
+            return;
         }
     }
 
@@ -563,7 +603,8 @@ public final class CardOverlayView extends View {
         out.set(left, top, left + size, top + size);
     }
 
-    private static String ellipsize(String text, Paint paint, float maxWidth) {
+    /** Package-private: the keyword wheel truncates its segment labels the same way. */
+    static String ellipsize(String text, Paint paint, float maxWidth) {
         if (paint.measureText(text) <= maxWidth) {
             return text;
         }
