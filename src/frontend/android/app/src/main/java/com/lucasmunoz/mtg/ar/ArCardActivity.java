@@ -1571,13 +1571,14 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         return player.active ? "▶ " + player.name : player.name;
     }
 
-    /** Sends one card's counter chips to the overlay, where they render above the card. */
+    /**
+     * Sends one card's counter chips to the overlay, where they render above the card. Stat
+     * counters collapse into the single net summary chip — per-kind chips live only in the
+     * panel, where they are removal controls — so the row stays short on a busy table.
+     */
     private void pushCounterChips(ActiveCard card) {
         CardCounters counters = store.get(card.printingId);
         List<String> labels = new ArrayList<>(counters.keywords);
-        for (CardCounters.StatCounter stat : counters.stats) {
-            labels.add(stat.count == 1 ? stat.label() : stat.label() + " ×" + stat.count);
-        }
         if (counters.commanderCasts > 0) {
             labels.add(getString(R.string.ar_tax_chip, counters.commanderTax()));
         }
