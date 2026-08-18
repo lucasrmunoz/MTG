@@ -290,7 +290,11 @@ export default function Home() {
    * along as a reference image, so whichever printing is physically on the table is recognised.
    */
   async function handleViewInAr() {
-    if (cardAr === null || card === null || card.imageUrl === null) {
+    if (cardAr === null || card === null) {
+      return;
+    }
+    const arImageUrl = selectedArtUrl ?? card.imageUrl;
+    if (arImageUrl === null) {
       return;
     }
 
@@ -298,7 +302,7 @@ export default function Home() {
       await cardAr.open({
         cardId: card.id,
         cardName: card.name,
-        imageUrl: selectedArtUrl ?? card.imageUrl,
+        imageUrl: arImageUrl,
         printings: artVersions.map((version) => ({
           id: version.id,
           imageUrl: version.imageUrl,
@@ -409,7 +413,7 @@ export default function Home() {
               <div className="panel rise p-4 sm:p-6">
                 <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
                   <h2 className="section-title">Selected Card</h2>
-                  {cardAr !== null && card.imageUrl !== null && (
+                  {cardAr !== null && (selectedArtUrl ?? card.imageUrl) !== null && (
                     <button
                       type="button"
                       onClick={() => void handleViewInAr()}
