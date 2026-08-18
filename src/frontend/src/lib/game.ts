@@ -518,8 +518,10 @@ export function applyArPlayers(game: GameState, players: readonly ArGamePlayer[]
       }
       return {
         ...player,
-        life: Math.trunc(update.life),
-        commanderCasts: Math.max(0, Math.trunc(update.commanderCasts)),
+        life: Number.isFinite(update.life) ? Math.trunc(update.life) : player.life,
+        commanderCasts: Number.isFinite(update.commanderCasts)
+          ? Math.max(0, Math.trunc(update.commanderCasts))
+          : player.commanderCasts,
       };
     }),
   };
