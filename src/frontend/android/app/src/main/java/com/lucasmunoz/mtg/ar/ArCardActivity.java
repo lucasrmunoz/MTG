@@ -52,6 +52,7 @@ import com.lucasmunoz.mtg.R;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -125,6 +126,9 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
          *  the UI thread by updateAbilityFlags; the GL thread only reads them. */
         volatile boolean flying;
         volatile boolean reach;
+        /** The scan the overlay, card list and tokens show — the only decoded bitmap a card
+         *  keeps. Written on the executor, read anywhere. */
+        volatile Bitmap displayBitmap;
         AugmentedImage trackedImage;
         Anchor anchor;
 
@@ -202,8 +206,6 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
 
     private final Object sessionLock = new Object();
     private Session session;
-    /** True when reference images changed since the session last configured. Guarded by lock. */
-    private boolean databaseDirty;
     private boolean installRequested;
     private final BackgroundRenderer backgroundRenderer = new BackgroundRenderer();
 
@@ -226,7 +228,16 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     private final List<ActiveCard> cardOrder = new CopyOnWriteArrayList<>();
     /** Which card each registered reference image belongs to, by augmented-image name. */
     private final Map<String, ActiveCard> cardByPrinting = new ConcurrentHashMap<>();
-    private final Map<String, Bitmap> referenceBitmaps = new ConcurrentHashMap<>();
+
+    /** Downloads card scans through a disk cache; decoded bitmaps are not retained. */
+    private ImageFetcher images;
+    /** The reference-image database, grown incrementally by syncDatabase. Executor only. */
+    private AugmentedImageDatabase database;
+    /** Printings already registered in {@link #database}. Executor only. */
+    private final Set<String> registeredPrintings = new HashSet<>();
+    /** Set when a card was removed or the session recreated: the next sync rebuilds the
+     *  database from scratch, because ARCore's database has no removeImage. */
+    private volatile boolean rebuildRequired;
 
     private volatile String focusedKey;
     /** A chip was tapped: the next surface tap places this card. */
@@ -308,6 +319,8 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
 
         applySystemBarInsets();
         store = new CounterStore(getFilesDir());
+        images = new ImageFetcher(new File(getCacheDir(), "card-scans"));
+        executor.execute(images::trim);
         glossary = new KeywordGlossary(this);
         wireCounterControls();
         panel.setVisibility(View.GONE);
@@ -719,7 +732,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             Bitmap tokenArt = null;
             if (player.cardArtCropUrl != null) {
                 try {
-                    tokenArt = ImageFetcher.fetch(player.cardArtCropUrl);
+                    tokenArt = images.fetch(player.cardArtCropUrl);
                 } catch (IOException e) {
                     Log.w(TAG, "No art crop for the life token; the scan stands in.", e);
                 }
@@ -750,7 +763,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             }
             downloadImages(card);
 
-            Bitmap art = tokenArt != null ? tokenArt : referenceBitmaps.get(card.printingId);
+            Bitmap art = tokenArt != null ? tokenArt : card.displayBitmap;
             if (art != null) {
                 Bitmap finalArt = art;
                 // Life and tax are read on the UI thread, where all their mutations happen.
@@ -761,71 +774,112 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         });
     }
 
-    /** Downloads any missing reference scans for a card, then re-registers the database. */
+    /** Shows the card's scan (disk-cached) and registers any new printings for tracking. */
     private void downloadImages(ActiveCard card) {
-        for (Map.Entry<String, String> entry : card.printingUrls.entrySet()) {
-            if (referenceBitmaps.containsKey(entry.getKey())) {
-                continue;
-            }
-            try {
-                referenceBitmaps.put(entry.getKey(), ImageFetcher.fetch(entry.getValue()));
-            } catch (IOException e) {
-                // One printing failing to download only means that copy will not be recognised.
-                Log.w(TAG, "Skipping reference image for " + entry.getKey(), e);
-            }
-        }
+        updateDisplayBitmap(card);
+        syncDatabase();
+    }
 
-        // Until tracking picks the real printing, display the best guess: the printing the
-        // counters currently key on.
-        Bitmap display = referenceBitmaps.get(card.printingId);
+    /**
+     * Decodes the scan the card should display — the printing the counters currently key on,
+     * falling back to the card's own key — and hands it to the overlay and card list. The one
+     * decoded bitmap a card retains; everything else lives in the disk cache.
+     */
+    private void updateDisplayBitmap(ActiveCard card) {
+        Bitmap display = decodePrinting(card, card.printingId);
         if (display == null) {
-            display = referenceBitmaps.get(card.key);
+            display = decodePrinting(card, card.key);
         }
         if (display != null) {
+            card.displayBitmap = display;
             overlay.upsertCard(card.key, display);
         } else {
             Log.w(TAG, "No scan could be downloaded for " + card.name);
         }
         // The card list shows these scans as thumbnails; an open list picks them up now.
         refreshCardList();
+    }
 
-        synchronized (sessionLock) {
-            databaseDirty = true;
+    /** One printing's scan via the disk cache, or null when it cannot be fetched or decoded. */
+    private Bitmap decodePrinting(ActiveCard card, String printingId) {
+        String url = card.printingUrls.get(printingId);
+        if (url == null) {
+            return null;
         }
-        executor.execute(this::reconfigureDatabaseIfDirty);
+        try {
+            return images.fetch(url);
+        } catch (IOException e) {
+            Log.w(TAG, "Could not fetch the scan for " + printingId, e);
+            return null;
+        }
     }
 
     /**
-     * Rebuilds the reference-image database from every card's downloaded scans. Runs on the
-     * executor: feature extraction takes tens of milliseconds per image. Cards already tracking
-     * keep their place — the pose moves onto a world anchor before the session reconfigures,
-     * because a database swap stops all current image tracking until re-detection.
+     * Brings the reference-image database up to date with the current cards. Runs on the
+     * executor, whose single thread owns {@link #database} and {@link #registeredPrintings}.
+     *
+     * New printings are fetched through the disk cache and added incrementally — feature
+     * extraction (20-30ms per image) runs only for images the database has never seen, and
+     * entirely outside the session lock, so the GL thread keeps rendering while it happens;
+     * configure() copies the database, so mutating it here never touches the live session. A
+     * removal instead rebuilds from scratch: ARCore's database has no removeImage.
+     *
+     * Cards already tracking keep their place — the pose moves onto a world anchor before the
+     * session reconfigures, because a database swap stops all image tracking until re-detection.
      */
-    private void reconfigureDatabaseIfDirty() {
+    private void syncDatabase() {
+        Session current;
         synchronized (sessionLock) {
-            if (session == null || !databaseDirty) {
-                return;
-            }
-            databaseDirty = false;
+            current = session;
+        }
+        if (current == null) {
+            return; // ensureSession schedules another sync once the session exists.
+        }
 
-            AugmentedImageDatabase database = new AugmentedImageDatabase(session);
-            int registered = 0;
-            for (Map.Entry<String, Bitmap> entry : referenceBitmaps.entrySet()) {
+        boolean mustConfigure = false;
+        if (rebuildRequired) {
+            rebuildRequired = false;
+            database = null;
+            registeredPrintings.clear();
+            mustConfigure = true;
+        }
+        if (database == null) {
+            database = new AugmentedImageDatabase(current);
+        }
+
+        for (ActiveCard card : cardOrder) {
+            for (Map.Entry<String, String> printing : card.printingUrls.entrySet()) {
+                if (!registeredPrintings.add(printing.getKey())) {
+                    continue;
+                }
+                Bitmap scan;
                 try {
-                    database.addImage(entry.getKey(), entry.getValue(), CARD_WIDTH_M);
-                    registered++;
+                    scan = images.fetch(printing.getValue());
+                } catch (IOException e) {
+                    // This copy just won't be recognised now; unregistering lets a later sync
+                    // retry once the network is back.
+                    Log.w(TAG, "Skipping reference image for " + printing.getKey(), e);
+                    registeredPrintings.remove(printing.getKey());
+                    continue;
+                }
+                try {
+                    database.addImage(printing.getKey(), scan, CARD_WIDTH_M);
+                    mustConfigure = true;
                 } catch (ImageInsufficientQualityException e) {
                     // A low-detail scan (full-art lands, mostly) cannot be tracked; the card can
-                    // still be placed manually.
-                    Log.w(TAG, "Not enough features to track printing " + entry.getKey());
+                    // still be placed manually. Stays registered so it is not retried.
+                    Log.w(TAG, "Not enough features to track printing " + printing.getKey());
                 }
             }
-            // Every image failing feature extraction keeps the working database; a genuinely
-            // empty set must install anyway — that is how a removed card stops being tracked.
-            if (registered == 0 && !referenceBitmaps.isEmpty()) {
+        }
+        if (!mustConfigure) {
+            return;
+        }
+
+        synchronized (sessionLock) {
+            if (session == null) {
                 return;
             }
-
             for (ActiveCard card : cardOrder) {
                 if (card.trackedImage != null) {
                     if (card.anchor != null) {
@@ -895,7 +949,9 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 }
                 session = new Session(this);
                 session.configure(buildConfig(null));
-                databaseDirty = !referenceBitmaps.isEmpty();
+                // A new session starts with an empty database; the sync below rebuilds it from
+                // whatever cards are already adopted.
+                rebuildRequired = true;
             } catch (UnavailableUserDeclinedInstallationException e) {
                 Toast.makeText(this, R.string.ar_install_declined, Toast.LENGTH_LONG).show();
                 finish();
@@ -908,7 +964,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             }
         }
 
-        executor.execute(this::reconfigureDatabaseIfDirty);
+        executor.execute(this::syncDatabase);
         return true;
     }
 
@@ -943,14 +999,18 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         if (frameRecorder != null) {
             frameRecorder.close();
         }
-        executor.shutdown();
         scanExecutor.shutdown();
-        synchronized (sessionLock) {
-            if (session != null) {
-                session.close();
-                session = null;
+        // A database sync may still be queued, and it uses the session outside the lock; closing
+        // the session as the executor's last task runs strictly after every queued sync.
+        executor.execute(() -> {
+            synchronized (sessionLock) {
+                if (session != null) {
+                    session.close();
+                    session = null;
+                }
             }
-        }
+        });
+        executor.shutdown();
     }
 
     // ------------------------------------------------------------------ CardOverlayView.Listener
@@ -1054,11 +1114,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 View row = getLayoutInflater().inflate(R.layout.ar_card_row, cardList, false);
 
                 ImageView thumb = row.findViewById(R.id.ar_row_thumb);
-                Bitmap scan = referenceBitmaps.get(card.printingId);
-                if (scan == null) {
-                    scan = referenceBitmaps.get(card.key);
-                }
-                thumb.setImageBitmap(scan);
+                thumb.setImageBitmap(card.displayBitmap);
 
                 TextView title = row.findViewById(R.id.ar_row_title);
                 GamePlayer owner = playersByCardKey.get(card.key);
@@ -1150,7 +1206,6 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         cardOrder.remove(card);
         for (String printingId : card.printingUrls.keySet()) {
             cardByPrinting.remove(printingId);
-            referenceBitmaps.remove(printingId);
         }
         overlay.removeCard(card.key);
         if (card.key.equals(pendingPlacementKey)) {
@@ -1167,9 +1222,9 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 card.anchor = null;
             }
             card.trackedImage = null;
-            databaseDirty = true;
         }
-        executor.execute(this::reconfigureDatabaseIfDirty);
+        rebuildRequired = true;
+        executor.execute(this::syncDatabase);
         refreshCardList();
         updateStatusLine();
     }
@@ -1557,11 +1612,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         focusedPlayerId = player.id;
         overlay.setFocusedToken(player.id);
 
-        Bitmap art = referenceBitmaps.get(card.printingId);
-        if (art == null) {
-            art = referenceBitmaps.get(card.key);
-        }
-        overlay.upsertToken(player.id, tokenName(player), art, player.life,
+        overlay.upsertToken(player.id, tokenName(player), card.displayBitmap, player.life,
                 player.commanderTax());
         pushGameChips(card, player);
         refreshCounterUi();
@@ -1749,11 +1800,17 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 }
 
                 if (newLock) {
-                    // Show the printing that is actually on the table — its scan is downloaded.
-                    Bitmap recognised = referenceBitmaps.get(image.getName());
-                    if (recognised != null) {
-                        overlay.upsertCard(card.key, recognised);
-                    }
+                    // Show the printing that is actually on the table. Its scan is on disk from
+                    // registration; the decode runs off this GL thread.
+                    String recognisedId = image.getName();
+                    executor.execute(() -> {
+                        Bitmap recognised = decodePrinting(card, recognisedId);
+                        if (recognised != null) {
+                            card.displayBitmap = recognised;
+                            overlay.upsertCard(card.key, recognised);
+                            refreshCardList();
+                        }
+                    });
                 }
                 // Commanders skip this: their counters belong to the player, not the printing.
                 if (!isGameCard(card.key) && !image.getName().equals(card.printingId)) {
