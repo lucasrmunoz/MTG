@@ -33,5 +33,33 @@
     "severity": "lfr",
     "dismissedAt": "2026-08-13T20:14:36.422Z",
     "dismissedAtContentSha": "d70a8826ecf825faedb14aedb268d57f438b320f58d08cd5f255cefcf54d5e91"
+  },
+  {
+    "fingerprint": "fc7a787b605be9c296744186628c1b3dd8e78a05",
+    "kind": "logic",
+    "severity": "lfr",
+    "dismissedAt": "2026-08-13T20:18:39.889Z",
+    "dismissedAtContentSha": "38d680044d15fef1e0b311b8959433e357dd36da969ac2b0f42619537723c0cb"
+  },
+  {
+    "fingerprint": "cd1fdc33790199cedc2f7e5afd4e11a07ed14799",
+    "kind": "bug",
+    "severity": "heroic",
+    "dismissedAt": "2026-08-13T20:29:49.878Z",
+    "dismissedAtContentSha": "b151643b1869250bff33bcd89843f6bfa5e01c90d08b514db10b977d6723225c"
+  },
+  {
+    "fingerprint": "e284e13fcad7166dcb6cb62f47c588ad69bb1e1e",
+    "kind": "bug",
+    "severity": "heroic",
+    "dismissedAt": "2026-08-14T14:13:40.132Z",
+    "dismissedAtContentSha": "05e399e3ebc0a169e22f128bd472fd7fc70f46444facf1f3187d6e9bd4de7b99"
+  },
+  {
+    "fingerprint": "4fba9a88c9a4a6a101944cdf1b50183e31a354d6",
+    "kind": "bug",
+    "severity": "normal",
+    "dismissedAt": "2026-08-14T21:45:44.659Z",
+    "dismissedAtContentSha": "81884dfd8325962cf6ef34c052816de2dd44157a1afb955f611a91f98cc594c7"
   }
 ]
