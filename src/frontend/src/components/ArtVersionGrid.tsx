@@ -72,6 +72,8 @@ export function ArtVersionGrid({
               onClick={() => onSelect(art.imageUrl)}
               onMouseEnter={() => onHover(art.imageUrl)}
               onMouseLeave={() => onHover(null)}
+              onFocus={() => onHover(art.imageUrl)}
+              onBlur={() => onHover(null)}
               aria-pressed={selectedUrl === art.imageUrl}
               className={`tile p-2 ${selectedUrl === art.imageUrl ? "tile-selected" : ""}`}
             >
