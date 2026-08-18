@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import {
   commanderTax,
   reminderLabel,
@@ -105,6 +105,14 @@ export function PlayerZone({
     stopHold(holdRef.current);
   }
 
+  // Keyboard activation fires a click with detail 0 and no pointer events; pointer taps already
+  // stepped in onPointerDown, so only the keyboard path may step here.
+  function keyboardStep(event: MouseEvent, delta: number) {
+    if (event.detail === 0) {
+      step(delta);
+    }
+  }
+
   return (
     <div
       style={{ gridArea: area }}
@@ -151,6 +159,7 @@ export function PlayerZone({
               onPointerUp={endHold}
               onPointerLeave={endHold}
               onPointerCancel={endHold}
+              onClick={(event) => keyboardStep(event, -1)}
               className="absolute inset-y-0 left-0 z-10 w-1/2 cursor-pointer touch-none"
             />
             <button
@@ -160,6 +169,7 @@ export function PlayerZone({
               onPointerUp={endHold}
               onPointerLeave={endHold}
               onPointerCancel={endHold}
+              onClick={(event) => keyboardStep(event, 1)}
               className="absolute inset-y-0 right-0 z-10 w-1/2 cursor-pointer touch-none"
             />
 
