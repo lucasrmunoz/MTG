@@ -414,3 +414,4 @@
 {"palaceId":"mtg-f22e49fe","trigger":"scheduled","startedAt":"2026-08-18T18:30:58.347Z","endedAt":"2026-08-18T18:30:58.984Z","outcome":"skipped","filed":0,"updated":0,"resolved":0,"commitSha":"447081d194669d463f6bce677e44791799dfdb47"}
 {"palaceId":"mtg-f22e49fe","trigger":"scheduled","startedAt":"2026-08-18T19:27:48.958Z","endedAt":"2026-08-18T19:27:49.559Z","outcome":"skipped","filed":0,"updated":0,"resolved":0,"commitSha":"447081d194669d463f6bce677e44791799dfdb47"}
 {"palaceId":"mtg-f22e49fe","trigger":"scheduled","startedAt":"2026-08-18T20:27:49.983Z","endedAt":"2026-08-18T20:27:50.621Z","outcome":"skipped","filed":0,"updated":0,"resolved":0,"commitSha":"447081d194669d463f6bce677e44791799dfdb47"}
+{"palaceId":"mtg-f22e49fe","trigger":"scheduled","startedAt":"2026-08-18T21:27:50.892Z","endedAt":"2026-08-18T21:29:26.349Z","outcome":"ok","filed":0,"updated":0,"resolved":0,"commitSha":"3ddc421ecf963bf03fa3d505dbaa761eab1e5c21","costUsd":0.72021225}

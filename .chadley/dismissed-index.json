@@ -82,5 +82,12 @@
     "severity": "normal",
     "dismissedAt": "2026-08-18T21:09:59.596Z",
     "dismissedAtContentSha": "46e55949377a64b44f0704ee0f0ce9e1e4f2b7f708515aa1177958554a465bf4"
+  },
+  {
+    "fingerprint": "dc73c35cc571dc6fddd547379be395401aef024a",
+    "kind": "logic",
+    "severity": "lfr",
+    "dismissedAt": "2026-08-18T21:22:10.210Z",
+    "dismissedAtContentSha": "b4cf98ef12ca362e192d2382c3fce1478372836da871719a90f940be18096486"
   }
 ]
