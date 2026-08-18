@@ -9,7 +9,9 @@
  * There is exactly one cache file, overwritten in place on every successful download — never a
  * second copy or a history of snapshots. The catalogue is parsed row by row off the network
  * stream instead of one giant JSON.parse, because materialising ~149,000 full row objects at once
- * costs hundreds of megabytes — enough to crash a phone WebView. The feed sends
+ * costs hundreds of megabytes — enough to crash a phone WebView. The cache file is line-oriented
+ * for the same reason: entries are written in bounded chunks and read back line by line, so
+ * persisting and reloading never hold the whole catalogue as one object or string. The feed sends
  * `access-control-allow-origin: *`, so a plain fetch works and the bytes never cross the native
  * bridge. Parsing rules mirror Mtg.Core's CardKingdomFeed. Keep the two in step.
  */
@@ -20,8 +22,18 @@ import type { VendorPrice } from "@/lib/types";
 
 const FEED_URL = "https://api.cardkingdom.com/api/v2/pricelist";
 
-/** The one cache file, in the app's private data directory. */
+/**
+ * The one cache file, in the app's private data directory: a header line, then one
+ * `[printingId, price]` line per entry. The name predates the line-oriented format; keeping it
+ * means old whole-JSON caches fail the parse below, get deleted, and re-download — no orphan file.
+ */
 const CACHE_FILE = "card-kingdom-prices.json";
+
+/**
+ * Cache writes flush whenever the pending text grows past this, so the file is written in ~1 MB
+ * appends instead of one whole-catalogue string.
+ */
+const PERSIST_CHUNK_CHARS = 1 << 20;
 
 /** How long a downloaded catalogue counts as fresh. After this, selecting the vendor re-downloads. */
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -41,10 +53,13 @@ let fetchedAt: string | null = null;
 /** Single-flight guard so a manual refresh cannot race an on-demand load into two downloads. */
 let inFlight: Promise<void> | null = null;
 
-/** Shape of the cache file. */
-interface CacheFile {
+/**
+ * First line of the cache file. The lines after it are `[printingId, VendorPrice]` tuples, one
+ * per line; `count` lets a load detect a write that died between chunks.
+ */
+interface CacheHeader {
   fetchedAt: string;
-  prices: Record<string, VendorPrice>;
+  count: number;
 }
 
 /** The fields actually read from a feed row; everything else in the row is ignored. */
@@ -212,17 +227,56 @@ async function download(): Promise<void> {
   fetchedAt = new Date().toISOString();
 
   try {
-    // writeFile replaces the file whole, which is what keeps this a single list rather than an
-    // accumulation of snapshots.
-    await Filesystem.writeFile({
-      path: CACHE_FILE,
-      directory: Directory.Data,
-      encoding: Encoding.UTF8,
-      data: JSON.stringify({ fetchedAt, prices: Object.fromEntries(catalogue) } satisfies CacheFile),
-    });
+    await persistToDisk(prices, fetchedAt);
   } catch (err) {
     // The download itself succeeded; losing only the disk copy costs a re-download next launch.
     console.warn("Could not persist the Card Kingdom catalogue; it stays in memory only.", err);
+    try {
+      // A write that died between chunks leaves a truncated file; better no cache than a torn one.
+      await Filesystem.deleteFile({ path: CACHE_FILE, directory: Directory.Data });
+    } catch {
+      // Never got created.
+    }
+  }
+}
+
+/**
+ * Replaces the cache file with a header line and one `[printingId, price]` line per entry,
+ * appended in bounded chunks so the whole catalogue is never serialised as one string.
+ */
+async function persistToDisk(
+  prices: Map<string, VendorPrice>,
+  fetchedAtIso: string,
+): Promise<void> {
+  let pending = `${JSON.stringify({ fetchedAt: fetchedAtIso, count: prices.size } satisfies CacheHeader)}\n`;
+  let replacing = true;
+
+  const flush = async (): Promise<void> => {
+    const options = {
+      path: CACHE_FILE,
+      directory: Directory.Data,
+      encoding: Encoding.UTF8,
+      data: pending,
+    };
+    if (replacing) {
+      // The first flush replaces the file whole, which is what keeps this a single list rather
+      // than an accumulation of snapshots.
+      await Filesystem.writeFile(options);
+      replacing = false;
+    } else {
+      await Filesystem.appendFile(options);
+    }
+    pending = "";
+  };
+
+  for (const entry of prices) {
+    pending += `${JSON.stringify(entry)}\n`;
+    if (pending.length >= PERSIST_CHUNK_CHARS) {
+      await flush();
+    }
+  }
+  if (pending.length > 0) {
+    await flush();
   }
 }
 
@@ -241,12 +295,24 @@ async function loadFromDisk(): Promise<boolean> {
   }
 
   try {
-    const cache = JSON.parse(contents) as CacheFile;
-    if (typeof cache.fetchedAt !== "string" || typeof cache.prices !== "object") {
-      throw new Error("The cache file does not have the expected shape.");
+    const lines = contents.split("\n");
+    const header = JSON.parse(lines[0] ?? "") as CacheHeader;
+    if (typeof header.fetchedAt !== "string" || typeof header.count !== "number") {
+      throw new Error("The cache file does not have the expected header.");
     }
-    catalogue = new Map(Object.entries(cache.prices));
-    fetchedAt = cache.fetchedAt;
+    const prices = new Map<string, VendorPrice>();
+    for (const line of lines.slice(1)) {
+      if (line === "") {
+        continue; // The trailing newline; entry lines are never blank.
+      }
+      const [id, price] = JSON.parse(line) as [string, VendorPrice];
+      prices.set(id, price);
+    }
+    if (prices.size !== header.count) {
+      throw new Error("The cache file holds fewer entries than its header promises.");
+    }
+    catalogue = prices;
+    fetchedAt = header.fetchedAt;
     return true;
   } catch {
     // A half-written or corrupt cache is useless; delete it so the next load downloads fresh.
