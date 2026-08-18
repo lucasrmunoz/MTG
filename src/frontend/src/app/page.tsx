@@ -297,10 +297,12 @@ export default function Home() {
     if (arImageUrl === null) {
       return;
     }
+    // The selected art belongs to a specific printing, so its id must ride along with its image.
+    const arVersion = artVersions.find((version) => version.imageUrl === arImageUrl);
 
     try {
       await cardAr.open({
-        cardId: card.id,
+        cardId: arVersion?.id ?? card.id,
         cardName: card.name,
         imageUrl: arImageUrl,
         printings: artVersions.map((version) => ({
