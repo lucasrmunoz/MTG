@@ -103,5 +103,19 @@
     "severity": "normal",
     "dismissedAt": "2026-08-19T17:34:55.465Z",
     "dismissedAtContentSha": "c8742b66c973942876f52d7d1798cb03ecff69012a4af7664446105b4e0b575b"
+  },
+  {
+    "fingerprint": "f3ce659e8d5f3e948c518f43165ea3f0d635d660",
+    "kind": "logic",
+    "severity": "lfr",
+    "dismissedAt": "2026-08-19T19:20:16.801Z",
+    "dismissedAtContentSha": "46e55949377a64b44f0704ee0f0ce9e1e4f2b7f708515aa1177958554a465bf4"
+  },
+  {
+    "fingerprint": "88e5e931ff97d9823411f3cc771a7a7a7af5e221",
+    "kind": "feature",
+    "severity": "lfr",
+    "dismissedAt": "2026-08-19T19:49:16.715Z",
+    "dismissedAtContentSha": "b63d980181854a70a9430322434b4162ce999932c2b2ffddb8f319009f4e9bfa"
   }
 ]
