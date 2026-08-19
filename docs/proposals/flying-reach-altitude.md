@@ -28,6 +28,14 @@ show they can touch the air layer.
   the art-version lookup) unioned with keyword counters. Adding a Flying counter in the panel
   lifts the card live; removing it lands the card. Flags are cached as volatile booleans on
   the card (`updateAbilityFlags`, UI thread) so the GL thread never touches the counter store.
+- **Flying toggle** (added 2026-08-19) — printed Flying can be switched off and back on: the
+  wheel's printed-Flying segment keeps its printed colour but answers taps (hub hint
+  "Printed — release to toggle"), and the panel's Flying chip greys out while off and offers
+  Disable/Enable in its glossary popup. A **Flying pill** on the card's chip row shows the
+  state: normal chip colours with an orange outline while airborne, greyed with no outline
+  when grounded (a Flying keyword counter folds into the pill instead of a second chip).
+  The override is session-local (`ActiveCard.flyingDisabled`) — a lost ability is game
+  state, so it is never persisted with the printing's counters. Reach is untouched.
 
 Files: `ArCardActivity.java` (`FLY_HEIGHT_M`, `updateAbilityFlags`/`hasAbility`, `computePose`,
 `projectCorners`), `CardOverlayView.java` (`CardPose` altitude fields, `drawGroundShadow`,

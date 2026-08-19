@@ -53,6 +53,13 @@
     <string name="ar_bind_commander_title">Whose commander is %1$s?</string>
     <string name="ar_panel_expand">▴</string>
     <string name="ar_panel_collapse">▾</string>
+    <string name="ar_create_tokens">⚄ Create %1$d × %2$s</string>
+    <string name="ar_create_tokens_ask">⚄ Create %1$s…</string>
+    <string name="ar_token_count_chip">×%1$d</string>
+    <string name="ar_token_count_title">How many %1$s tokens?</string>
+    <string name="ar_token_fetch_failed">Could not fetch the %1$s token card.</string>
+    <string name="ar_flying_disable">Disable Flying</string>
+    <string name="ar_flying_enable">Enable Flying</string>
 
     <string-array name="ar_keyword_presets">
         <item>Flying</item>

@@ -19,9 +19,44 @@ public class ScryfallLookupTest {
         assertEquals("Lightning Bolt", card.name);
         assertEquals("https://img/bolt.jpg", card.imageUrl);
         assertEquals(0, card.keywords.size());
-        // Absent type line and set name parse as empty, never null.
+        // Absent type line, set name and oracle text parse as empty, never null.
         assertEquals("", card.typeLine);
         assertEquals("", card.setName);
+        assertEquals("", card.oracleText);
+        assertEquals(0, card.tokenParts.size());
+    }
+
+    @Test
+    public void parsesOracleTextAndTokenParts() throws Exception {
+        // Shaped like Army of the Damned: all_parts links the card itself and its token.
+        JSONObject json = new JSONObject(
+                "{\"id\":\"army\",\"name\":\"Army of the Damned\","
+                        + "\"oracle_text\":\"Create thirteen tapped 2/2 black Zombie creature "
+                        + "tokens.\","
+                        + "\"all_parts\":["
+                        + "{\"component\":\"combo_piece\",\"id\":\"army\","
+                        + "\"name\":\"Army of the Damned\"},"
+                        + "{\"component\":\"token\",\"id\":\"zombie-token\","
+                        + "\"name\":\"Zombie\"}],"
+                        + "\"image_uris\":{\"normal\":\"https://img/army.jpg\"}}");
+        ScryfallLookup.CardSummary card = ScryfallLookup.parseCard(json);
+        assertEquals("Create thirteen tapped 2/2 black Zombie creature tokens.",
+                card.oracleText);
+        assertEquals(1, card.tokenParts.size());
+        assertEquals("zombie-token", card.tokenParts.get(0).id);
+        assertEquals("Zombie", card.tokenParts.get(0).name);
+    }
+
+    @Test
+    public void joinsFaceOracleTexts() throws Exception {
+        JSONObject json = new JSONObject(
+                "{\"id\":\"dfc\",\"name\":\"Front // Back\","
+                        + "\"card_faces\":[{\"name\":\"Front\","
+                        + "\"oracle_text\":\"Create a Treasure token.\","
+                        + "\"image_uris\":{\"normal\":\"https://img/front.jpg\"}},"
+                        + "{\"name\":\"Back\",\"oracle_text\":\"Flying\"}]}");
+        ScryfallLookup.CardSummary card = ScryfallLookup.parseCard(json);
+        assertEquals("Create a Treasure token.\nFlying", card.oracleText);
     }
 
     @Test

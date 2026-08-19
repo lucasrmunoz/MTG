@@ -57,6 +57,9 @@ public final class CardOverlayView extends View {
         float skyY;
         boolean flying;
         boolean reach;
+        /** A spread copy of a token stack: drawn like its card, but chips, focus border and
+         *  the shadow/reach indicators stay on the primary pose alone. */
+        boolean echo;
 
         CardPose(String key, float[] corners, float centerX, float centerY, float baseWidthPx) {
             this.key = key;
@@ -125,11 +128,18 @@ public final class CardOverlayView extends View {
         }
     }
 
+    /** The Flying pill on a card's chip row: absent, lit, or greyed out. */
+    static final int FLYING_PILL_NONE = 0;
+    static final int FLYING_PILL_ACTIVE = 1;
+    static final int FLYING_PILL_DISABLED = 2;
+
     /** Per-card visual state, owned by this view and mutated from the UI thread. */
     private static final class RenderState {
         Bitmap bitmap;
         final List<String> chips = new ArrayList<>();
         String summary = "";
+        /** One of the FLYING_PILL_* states; drawn first in the chip row. */
+        int flyingPill = FLYING_PILL_NONE;
         boolean placed;
         float scale = 1f;
         /** Where the card was last drawn, for routing taps. */
@@ -278,11 +288,12 @@ public final class CardOverlayView extends View {
     }
 
     /** Called from the UI thread whenever one card's counters change. */
-    void setChips(String key, List<String> labels, String summary) {
+    void setChips(String key, List<String> labels, String summary, int flyingPill) {
         RenderState state = stateFor(key);
         state.chips.clear();
         state.chips.addAll(labels);
         state.summary = summary;
+        state.flyingPill = flyingPill;
         postInvalidate();
     }
 
@@ -665,7 +676,11 @@ public final class CardOverlayView extends View {
 
         canvas.drawBitmap(state.bitmap, null, dst, bitmapPaint);
         canvas.drawRoundRect(dst, dp(6), dp(6),
-                pose.key.equals(focusedKey) ? focusedBorder : idleBorder);
+                !pose.echo && pose.key.equals(focusedKey) ? focusedBorder : idleBorder);
+        if (pose.echo) {
+            state.lastRect.union(dst);
+            return;
+        }
         state.lastRect.set(dst);
         drawChips(canvas, state, dst.left, dst.top - dp(10));
     }
@@ -680,6 +695,14 @@ public final class CardOverlayView extends View {
         placeMatrix.setPolyToPoly(src, 0, pose.corners, 0, 4);
         canvas.drawBitmap(state.bitmap, placeMatrix, bitmapPaint);
 
+        if (pose.echo) {
+            // The spread copy joins the primary's touch rect, so tapping any copy focuses
+            // the stack; the border, chips and focus rect stay the primary's alone.
+            for (int i = 0; i < 4; i++) {
+                state.lastRect.union(pose.corners[i * 2], pose.corners[i * 2 + 1]);
+            }
+            return;
+        }
         state.lastRect.set(pose.corners[0], pose.corners[1], pose.corners[0], pose.corners[1]);
         for (int i = 1; i < 4; i++) {
             state.lastRect.union(pose.corners[i * 2], pose.corners[i * 2 + 1]);
@@ -697,6 +720,10 @@ public final class CardOverlayView extends View {
         float height = dp(22);
         float gap = dp(6);
 
+        if (state.flyingPill != FLYING_PILL_NONE) {
+            x = drawFlyingPill(canvas, state.flyingPill, x, baselineY, padding, height) + gap;
+        }
+
         List<String> labels = new ArrayList<>(state.chips);
         if (!state.summary.isEmpty()) {
             labels.add(0, state.summary);
@@ -712,6 +739,34 @@ public final class CardOverlayView extends View {
             canvas.drawText(label, x + padding, baselineY - dp(7), chipText);
             x = chip.right + gap;
         }
+    }
+
+    /**
+     * The Flying pill: normal chip colours with an orange outline while the ability is on;
+     * greyed out with no outline once it is toggled off. Returns the pill's right edge.
+     */
+    private float drawFlyingPill(Canvas canvas, int pill, float x, float baselineY,
+            float padding, float height) {
+        boolean active = pill == FLYING_PILL_ACTIVE;
+        String label = "Flying";
+        float textWidth = chipText.measureText(label);
+        RectF chip = new RectF(x, baselineY - height, x + textWidth + padding * 2, baselineY);
+
+        int savedBackground = chipBackground.getAlpha();
+        int savedText = chipText.getAlpha();
+        if (!active) {
+            chipBackground.setAlpha(savedBackground / 2);
+            chipText.setAlpha(110);
+        }
+        canvas.drawRoundRect(chip, height / 2, height / 2, chipBackground);
+        canvas.drawText(label, x + padding, baselineY - dp(7), chipText);
+        chipBackground.setAlpha(savedBackground);
+        chipText.setAlpha(savedText);
+
+        if (active) {
+            canvas.drawRoundRect(chip, height / 2, height / 2, focusedBorder);
+        }
+        return chip.right;
     }
 
     private float dp(float value) {

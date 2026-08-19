@@ -22,6 +22,17 @@ final class ScryfallLookup {
 
     private static final String BASE = "https://api.scryfall.com";
 
+    /** A token card this card creates, linked by Scryfall's curated all_parts array. */
+    static final class TokenPart {
+        final String id;
+        final String name;
+
+        TokenPart(String id, String name) {
+            this.id = id;
+            this.name = name;
+        }
+    }
+
     /** What scan mode needs to know about a card or printing. */
     static final class CardSummary {
         final String id;
@@ -32,15 +43,21 @@ final class ScryfallLookup {
         /** Type line and set name for the card list; empty when Scryfall omits them. */
         final String typeLine;
         final String setName;
+        /** Rules text (faces joined for double-faced cards); empty when Scryfall omits it. */
+        final String oracleText;
+        /** The token cards this card creates; empty for the vast majority of cards. */
+        final List<TokenPart> tokenParts;
 
         CardSummary(String id, String name, String imageUrl, List<String> keywords,
-                String typeLine, String setName) {
+                String typeLine, String setName, String oracleText, List<TokenPart> tokenParts) {
             this.id = id;
             this.name = name;
             this.imageUrl = imageUrl;
             this.keywords = keywords;
             this.typeLine = typeLine;
             this.setName = setName;
+            this.oracleText = oracleText;
+            this.tokenParts = tokenParts;
         }
     }
 
@@ -109,6 +126,23 @@ final class ScryfallLookup {
         }
     }
 
+    /**
+     * One card by Scryfall id — how a token card linked from all_parts gets its scan. Null on
+     * 404 (a stale link), IOException on anything else.
+     */
+    static CardSummary byId(String id) throws IOException {
+        JSONObject json = getJson(BASE + "/cards/" + encode(id));
+        if (json == null) {
+            return null;
+        }
+        try {
+            CardSummary card = parseCard(json);
+            return card != null && card.imageUrl != null ? card : null;
+        } catch (JSONException e) {
+            throw new IOException("Could not parse Scryfall's card-by-id response.", e);
+        }
+    }
+
     /** Every printing with distinct artwork, oldest first; the first page is plenty. */
     static List<CardSummary> artVersions(String cardName) throws IOException {
         String query = encode("!\"" + cardName + "\"");
@@ -140,7 +174,51 @@ final class ScryfallLookup {
             }
         }
         return new CardSummary(id, name, imageUrl(json), keywords,
-                json.optString("type_line", ""), json.optString("set_name", ""));
+                json.optString("type_line", ""), json.optString("set_name", ""),
+                oracleText(json), tokenParts(json, id));
+    }
+
+    /** Top-level rules text, or the faces' texts joined — double-faced cards publish per face. */
+    private static String oracleText(JSONObject card) {
+        String text = card.optString("oracle_text", "");
+        if (!text.isEmpty()) {
+            return text;
+        }
+        JSONArray faces = card.optJSONArray("card_faces");
+        if (faces == null) {
+            return "";
+        }
+        StringBuilder joined = new StringBuilder();
+        for (int i = 0; i < faces.length(); i++) {
+            JSONObject face = faces.optJSONObject(i);
+            String faceText = face == null ? "" : face.optString("oracle_text", "");
+            if (!faceText.isEmpty()) {
+                if (joined.length() > 0) {
+                    joined.append('\n');
+                }
+                joined.append(faceText);
+            }
+        }
+        return joined.toString();
+    }
+
+    /** The all_parts entries marked as tokens — Scryfall's own "this card creates that" links. */
+    private static List<TokenPart> tokenParts(JSONObject card, String cardId) throws JSONException {
+        List<TokenPart> parts = new ArrayList<>();
+        JSONArray allParts = card.optJSONArray("all_parts");
+        if (allParts == null) {
+            return parts;
+        }
+        for (int i = 0; i < allParts.length(); i++) {
+            JSONObject part = allParts.getJSONObject(i);
+            String partId = part.optString("id", "");
+            String partName = part.optString("name", "");
+            if ("token".equals(part.optString("component", ""))
+                    && !partId.isEmpty() && !partName.isEmpty() && !partId.equals(cardId)) {
+                parts.add(new TokenPart(partId, partName));
+            }
+        }
+        return parts;
     }
 
     /** Package-visible for unit tests. */

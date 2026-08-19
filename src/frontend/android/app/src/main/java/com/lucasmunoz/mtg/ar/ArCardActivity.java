@@ -113,6 +113,15 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     /** Shadows shrink a little with altitude, reinforcing the height read. */
     private static final float SHADOW_SCALE = 0.85f;
 
+    /** A token stack renders as its copies dealt out in cascading rows around the anchor:
+     *  up to this many per row, each overlapping the last like cards laid on a table. */
+    private static final int SPREAD_COLUMNS = 5;
+    private static final float SPREAD_STEP_X_M = CARD_WIDTH_M * 0.45f;
+    private static final float SPREAD_STEP_Z_M = CARD_HEIGHT_M * 0.55f;
+    /** Copies actually drawn; past this the ×N chip carries the count — 99 warped bitmaps
+     *  per frame would cost more than a three-digit horde communicates. */
+    private static final int MAX_SPREAD_COPIES = 24;
+
     private static final int CAMERA_PERMISSION_CODE = 41;
     private static final int MAX_REFERENCE_IMAGES_PER_CARD = 12;
     /**
@@ -132,6 +141,13 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         /** Type line and set name for the card list; empty until a Scryfall response says. */
         volatile String typeLine = "";
         volatile String setName = "";
+        /** Rules text, kept so token-creation offers can read the count out of it. */
+        volatile String oracleText = "";
+        /** The token cards this card creates, per Scryfall's all_parts; usually empty. */
+        final List<ScryfallLookup.TokenPart> tokenParts = new CopyOnWriteArrayList<>();
+        /** For a card standing in for a pile of tokens: how many it represents. 0 = a real
+         *  card. Session-local by design — a zombie horde is game state, not card state. */
+        volatile int tokenCount;
         volatile boolean located;
         volatile float halfWidthM = CARD_WIDTH_M / 2f;
         volatile float halfHeightM = CARD_HEIGHT_M / 2f;
@@ -139,6 +155,9 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
          *  the UI thread by updateAbilityFlags; the GL thread only reads them. */
         volatile boolean flying;
         volatile boolean reach;
+        /** Flying toggled off by the user — the card grounds even though the ability is
+         *  printed or countered on. Session-local, like a lost ability mid-game. */
+        volatile boolean flyingDisabled;
         /** The scan the overlay, card list and tokens show — the only decoded bitmap a card
          *  keeps. Written on the executor, read anywhere. */
         volatile Bitmap displayBitmap;
@@ -333,6 +352,14 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 }
                 if (entry.custom) {
                     showCustomKeywordDialog();
+                    return;
+                }
+                if (entry.locked) {
+                    // Printed Flying, the one selectable locked entry: toggle the ability.
+                    ActiveCard card = focusedKey == null ? null : cardsByKey.get(focusedKey);
+                    if (card != null) {
+                        toggleFlying(card);
+                    }
                     return;
                 }
                 if (entry.active) {
@@ -617,6 +644,8 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 added.keywords.addAll(candidate.keywords);
                 added.typeLine = candidate.typeLine;
                 added.setName = candidate.setName;
+                added.oracleText = candidate.oracleText;
+                added.tokenParts.addAll(candidate.tokenParts);
                 runOnUiThread(() -> adoptCard(added, true));
                 maybeFlashGuideConfirm(candidate);
                 // A new card confirming makes any standing "same card again" invitation stale.
@@ -1205,7 +1234,9 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
 
                 TextView title = row.findViewById(R.id.ar_row_title);
                 GamePlayer owner = playersByCardKey.get(card.key);
-                title.setText(owner == null ? card.name : owner.name + " · " + card.name);
+                String name = card.tokenCount > 0
+                        ? card.name + " ×" + card.tokenCount : card.name;
+                title.setText(owner == null ? name : owner.name + " · " + name);
 
                 TextView subtitle = row.findViewById(R.id.ar_row_subtitle);
                 String details = cardDetailsLine(card);
@@ -1553,13 +1584,17 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             return entries;
         }
         for (String preset : getResources().getStringArray(R.array.ar_keyword_presets)) {
+            boolean printed = containsIgnoreCase(card.keywords, preset);
             entries.add(new KeywordWheelView.Entry(preset,
                     containsIgnoreCase(counters.keywords, preset),
-                    containsIgnoreCase(card.keywords, preset),
+                    printed,
+                    // Printed Flying stays its printed colour but answers taps: selecting it
+                    // toggles the ability off and back on instead of being inert.
+                    printed && preset.equalsIgnoreCase("Flying"),
                     false));
         }
         entries.add(new KeywordWheelView.Entry(
-                getString(R.string.ar_keyword_custom), false, false, true));
+                getString(R.string.ar_keyword_custom), false, false, false, true));
         return entries;
     }
 
@@ -1625,8 +1660,47 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
      */
     private void updateAbilityFlags(ActiveCard card) {
         CardCounters counters = store.get(card.printingId);
-        card.flying = hasAbility(card, counters, "Flying");
+        card.flying = !card.flyingDisabled && hasAbility(card, counters, "Flying");
         card.reach = hasAbility(card, counters, "Reach");
+    }
+
+    /**
+     * Grounds a flying card or lifts it back into the air — the user's override on top of
+     * printed keywords and counters. Session-local, never persisted with the printing's
+     * counters: a lost ability is game state, not card state.
+     */
+    private void toggleFlying(ActiveCard card) {
+        card.flyingDisabled = !card.flyingDisabled;
+        updateAbilityFlags(card);
+        GamePlayer owner = playersByCardKey.get(card.key);
+        if (owner != null) {
+            pushGameChips(card, owner);
+        } else {
+            pushCounterChips(card);
+        }
+        refreshCounterUi();
+    }
+
+    /** The overlay pill state for a card: lit while flying, greyed once toggled off. */
+    private int flyingPill(ActiveCard card, CardCounters counters) {
+        if (!hasAbility(card, counters, "Flying")) {
+            return CardOverlayView.FLYING_PILL_NONE;
+        }
+        return card.flyingDisabled
+                ? CardOverlayView.FLYING_PILL_DISABLED : CardOverlayView.FLYING_PILL_ACTIVE;
+    }
+
+    /** The Flying chip's popup: the glossary definition plus the ground/lift toggle. */
+    private void showFlyingDialog(ActiveCard card) {
+        String definition = glossary.lookup("Flying");
+        new AlertDialog.Builder(this)
+                .setTitle("Flying")
+                .setMessage(definition != null ? definition : getString(R.string.ar_no_definition))
+                .setPositiveButton(android.R.string.ok, null)
+                .setNegativeButton(card.flyingDisabled
+                        ? R.string.ar_flying_enable : R.string.ar_flying_disable,
+                        (dialog, which) -> toggleFlying(card))
+                .show();
     }
 
     private static boolean hasAbility(ActiveCard card, CardCounters counters, String ability) {
@@ -1663,10 +1737,19 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         }
 
         // The card's own keywords first: tap for the glossary definition. They are part of the
-        // card, so there is nothing to remove.
+        // card, so there is nothing to remove — except Flying, whose chip greys out while the
+        // ability is toggled off and whose popup offers the toggle.
         if (card != null) {
             for (String keyword : card.keywords) {
-                addChip(keyword, () -> showKeywordDefinition(keyword, null));
+                if (keyword.equalsIgnoreCase("Flying")) {
+                    ActiveCard flyer = card;
+                    Button chip = addChip(keyword, () -> showFlyingDialog(flyer));
+                    if (card.flyingDisabled) {
+                        chip.setAlpha(0.45f);
+                    }
+                } else {
+                    addChip(keyword, () -> showKeywordDefinition(keyword, null));
+                }
             }
         }
 
@@ -1683,6 +1766,9 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 counters.removeStat(stat.power, stat.toughness);
                 persistAndRefresh();
             });
+        }
+        if (card != null) {
+            addTokenChips(card);
         }
         taxLabel.setText(getString(R.string.ar_tax_chip, counters.commanderTax()));
 
@@ -1751,6 +1837,125 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         updateStatusLine();
     }
 
+    // ----------------------------------------------------------------------------- token stacks
+
+    /**
+     * The token chips for the focused card. A stack standing in for a pile of tokens gets its
+     * count controls — remove one, set exactly, add one; zero removes the stack. A card whose
+     * text creates tokens offers one create chip per token kind, counted from its rules text
+     * ("Create thirteen … Zombie creature tokens" → "⚄ Create 13 × Zombie"); when the text
+     * leaves the count open (X, "that many") the chip asks instead.
+     */
+    private void addTokenChips(ActiveCard card) {
+        if (card.tokenCount > 0) {
+            addChip(getString(R.string.ar_tax_minus),
+                    () -> setTokenCount(card, card.tokenCount - 1));
+            addChip(getString(R.string.ar_token_count_chip, card.tokenCount),
+                    () -> askTokenCount(card.name, card.tokenCount,
+                            count -> setTokenCount(card, count)));
+            addChip(getString(R.string.ar_tax_plus),
+                    () -> setTokenCount(card, card.tokenCount + 1));
+            return;
+        }
+        for (ScryfallLookup.TokenPart part : card.tokenParts) {
+            int count = TokenCreation.countFor(card.oracleText, part.name);
+            if (count > 0) {
+                addChip(getString(R.string.ar_create_tokens, count, part.name),
+                        () -> spawnTokenStack(part, count));
+            } else {
+                addChip(getString(R.string.ar_create_tokens_ask, part.name),
+                        () -> askTokenCount(part.name, 1, c -> spawnTokenStack(part, c)));
+            }
+        }
+    }
+
+    /** Callback for {@link #askTokenCount}. */
+    private interface CountListener {
+        void onCount(int count);
+    }
+
+    /** Number picker for a token count — the open-ended create chips and the exact-set chip. */
+    private void askTokenCount(String tokenName, int current, CountListener listener) {
+        NumberPicker picker = new NumberPicker(this);
+        picker.setMinValue(0);
+        picker.setMaxValue(99);
+        picker.setValue(Math.min(99, Math.max(0, current)));
+        new AlertDialog.Builder(this)
+                .setTitle(getString(R.string.ar_token_count_title, tokenName))
+                .setView(picker)
+                .setPositiveButton(android.R.string.ok,
+                        (dialog, which) -> listener.onCount(picker.getValue()))
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    /**
+     * One tap creates the whole batch: the official token card joins the scene as a stack
+     * representing {@code count} tokens, instead of the user scanning each one or ignoring
+     * them. A stack of that token already on the table just grows; otherwise the token card is
+     * fetched by its all_parts id and arrives armed for tap-to-place, so it lands where the
+     * pile sits. Its image registers like any card's, so a physical token card can track it.
+     */
+    private void spawnTokenStack(ScryfallLookup.TokenPart part, int count) {
+        if (count <= 0) {
+            return;
+        }
+        ActiveCard existing = cardsByKey.get(part.id);
+        if (existing != null) {
+            setTokenCount(existing, existing.tokenCount + count);
+            return;
+        }
+        executor.execute(() -> {
+            ScryfallLookup.CardSummary token = null;
+            try {
+                token = ScryfallLookup.byId(part.id);
+            } catch (IOException e) {
+                Log.w(TAG, "Could not fetch the token card " + part.id, e);
+            }
+            if (token == null) {
+                runOnUiThread(() -> Toast.makeText(this,
+                        getString(R.string.ar_token_fetch_failed, part.name),
+                        Toast.LENGTH_LONG).show());
+                return;
+            }
+            ScryfallLookup.CardSummary summary = token;
+            runOnUiThread(() -> {
+                // A second tap can race the first fetch; the late arrival grows the stack
+                // instead of being swallowed by adoptCard's duplicate guard.
+                ActiveCard raced = cardsByKey.get(summary.id);
+                if (raced != null) {
+                    setTokenCount(raced, raced.tokenCount + count);
+                    return;
+                }
+                ActiveCard stack = new ActiveCard(summary.id, summary.name, summary.imageUrl);
+                stack.keywords.addAll(summary.keywords);
+                stack.typeLine = summary.typeLine;
+                stack.setName = summary.setName;
+                stack.tokenCount = count;
+                adoptCard(stack, false);
+                pendingPlacementKey = stack.key;
+                notePlacementIntent();
+                updateStatusLine();
+            });
+        });
+    }
+
+    /**
+     * Sets a stack's count everywhere it shows — its overlay chip, the panel, the card list.
+     * Zero removes the stack: the last zombie died. Never persisted; a stack lives and dies
+     * with the session.
+     */
+    private void setTokenCount(ActiveCard stack, int count) {
+        if (count <= 0) {
+            removeCard(stack);
+            return;
+        }
+        stack.tokenCount = count;
+        pushCounterChips(stack);
+        refreshCounterUi();
+        refreshCardList();
+    }
+
     /**
      * The glossary popup: what a keyword does, with "Remove one" offered only for keyword
      * counters — a card's printed keywords are not removable.
@@ -1804,7 +2009,8 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             labels.add(getString(R.string.ar_tax_chip, player.commanderTax()));
         }
         labels.addAll(player.reminders);
-        overlay.setChips(card.key, labels, tokenName(player));
+        overlay.setChips(card.key, labels, tokenName(player),
+                flyingPill(card, store.get(card.printingId)));
     }
 
     /** The player's name with a turn marker when it is their turn. */
@@ -1819,14 +2025,23 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
      */
     private void pushCounterChips(ActiveCard card) {
         CardCounters counters = store.get(card.printingId);
-        List<String> labels = new ArrayList<>(counters.keywords);
+        List<String> labels = new ArrayList<>();
+        if (card.tokenCount > 0) {
+            labels.add(getString(R.string.ar_token_count_chip, card.tokenCount));
+        }
+        for (String keyword : counters.keywords) {
+            // A Flying counter is already the pill; a second "Flying" chip would just repeat it.
+            if (!keyword.equalsIgnoreCase("Flying")) {
+                labels.add(keyword);
+            }
+        }
         if (counters.commanderCasts > 0) {
             labels.add(getString(R.string.ar_tax_chip, counters.commanderTax()));
         }
         String summary = counters.stats.isEmpty()
                 ? ""
                 : String.format("%+d/%+d", counters.netPower(), counters.netToughness());
-        overlay.setChips(card.key, labels, summary);
+        overlay.setChips(card.key, labels, summary, flyingPill(card, counters));
     }
 
     private void setPanelTitle(String title) {
@@ -1839,7 +2054,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         }
     }
 
-    private void addChip(String label, Runnable onTap) {
+    private Button addChip(String label, Runnable onTap) {
         // The style rides in as defStyleRes — a plain new Button() would be a full-size
         // default-themed Material button, far too heavy for a counter chip.
         Button chip = new Button(this, null, 0, R.style.ArChip);
@@ -1849,6 +2064,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         params.setMarginEnd((int) (6 * getResources().getDisplayMetrics().density));
         chipRow.addView(chip, params);
+        return chip;
     }
 
     // -------------------------------------------------------------------------------- GL renderer
@@ -2110,15 +2326,33 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             Matrix.multiplyMM(viewProjection, 0, projectionMatrix, 0, viewMatrix, 0);
 
             for (ActiveCard card : cardOrder) {
-                CardOverlayView.CardPose pose = computePose(card);
-                if (pose != null) {
-                    poses.add(pose);
-                }
+                appendPoses(card, poses);
             }
             return poses;
         }
 
-        private CardOverlayView.CardPose computePose(ActiveCard card) {
+        /**
+         * One pose for a normal card; a token stack gets one per represented copy, dealt out
+         * in cascading rows centred on its anchor. The primary pose comes first — it carries
+         * the chips, focus border and shadow — and the copies follow as echoes, so the count
+         * chips changing redraws the spread on the very next frame.
+         */
+        private void appendPoses(ActiveCard card, List<CardOverlayView.CardPose> poses) {
+            int copies = Math.max(1, Math.min(card.tokenCount, MAX_SPREAD_COPIES));
+            int columns = Math.min(copies, SPREAD_COLUMNS);
+            int rows = (copies + SPREAD_COLUMNS - 1) / SPREAD_COLUMNS;
+            for (int i = 0; i < copies; i++) {
+                float dx = (i % SPREAD_COLUMNS - (columns - 1) / 2f) * SPREAD_STEP_X_M;
+                float dz = (i / SPREAD_COLUMNS - (rows - 1) / 2f) * SPREAD_STEP_Z_M;
+                CardOverlayView.CardPose pose = computePose(card, dx, dz, i > 0);
+                if (pose != null) {
+                    poses.add(pose);
+                }
+            }
+        }
+
+        private CardOverlayView.CardPose computePose(ActiveCard card, float dx, float dz,
+                boolean echo) {
             Pose pose;
             if (card.trackedImage != null
                     && card.trackedImage.getTrackingState() == TrackingState.TRACKING
@@ -2139,12 +2373,13 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             // lift into a pure move-closer with no visible altitude.
             boolean flying = card.flying;
             float lift = flying ? flyLift() : 0f;
-            float[] corners = projectCorners(pose, halfWidth, halfHeight, lift);
+            float[] corners = projectCorners(pose, halfWidth, halfHeight, lift, dx, dz);
             if (corners == null) {
                 return null;
             }
-            float[] center = projectToScreen(
-                    new float[] {pose.tx(), pose.ty() + lift, pose.tz()});
+            float[] centerWorld = pose.transformPoint(new float[] {dx, 0, dz});
+            centerWorld[1] += lift;
+            float[] center = projectToScreen(centerWorld);
             if (center == null) {
                 return null;
             }
@@ -2152,12 +2387,18 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             float baseWidth = (float) Math.hypot(corners[2] - corners[0], corners[3] - corners[1]);
             CardOverlayView.CardPose out = new CardOverlayView.CardPose(
                     card.key, corners, center[0], center[1], baseWidth);
+            out.echo = echo;
+            if (echo) {
+                // Spread copies stay plain quads; the shadow, tether and reach indicator
+                // would repeat into visual noise, so the primary carries them alone.
+                return out;
+            }
             if (flying) {
                 // The ground shadow needs the table-level geometry too. Losing it to a
                 // projection edge case loses only the shadow, never the card itself.
                 float[] ground = projectToScreen(pose.transformPoint(
-                        new float[] {SHADOW_OFFSET_M, 0, SHADOW_OFFSET_M}));
-                float[] shadowCorners = projectShadowCorners(pose, halfWidth, halfHeight);
+                        new float[] {SHADOW_OFFSET_M + dx, 0, SHADOW_OFFSET_M + dz}));
+                float[] shadowCorners = projectShadowCorners(pose, halfWidth, halfHeight, dx, dz);
                 if (ground != null && shadowCorners != null) {
                     out.flying = true;
                     out.shadowCorners = shadowCorners;
@@ -2165,8 +2406,9 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                     out.groundY = ground[1];
                 }
             } else if (card.reach) {
-                float[] sky = projectToScreen(
-                        new float[] {pose.tx(), pose.ty() + FLY_HEIGHT_M, pose.tz()});
+                float[] skyWorld = pose.transformPoint(new float[] {dx, 0, dz});
+                skyWorld[1] += FLY_HEIGHT_M;
+                float[] sky = projectToScreen(skyWorld);
                 if (sky != null) {
                     out.reach = true;
                     out.skyX = sky[0];
@@ -2220,25 +2462,30 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         }
 
         /** The card's four corners lifted the given height along WORLD up, projected to screen.
-         *  The image lies in the pose's X-Z plane; -Z is the top edge of the artwork. */
-        private float[] projectCorners(Pose pose, float halfWidth, float halfHeight, float lift) {
+         *  The image lies in the pose's X-Z plane; -Z is the top edge of the artwork. The
+         *  (dx, dz) offset places one copy of a spread; a lone card passes zeroes. */
+        private float[] projectCorners(Pose pose, float halfWidth, float halfHeight, float lift,
+                float dx, float dz) {
             return projectQuad(pose, lift, new float[][] {
-                    {-halfWidth, 0, -halfHeight},
-                    {halfWidth, 0, -halfHeight},
-                    {halfWidth, 0, halfHeight},
-                    {-halfWidth, 0, halfHeight},
+                    {dx - halfWidth, 0, dz - halfHeight},
+                    {dx + halfWidth, 0, dz - halfHeight},
+                    {dx + halfWidth, 0, dz + halfHeight},
+                    {dx - halfWidth, 0, dz + halfHeight},
             });
         }
 
         /** A flyer's shadow quad: table level, pushed out by the faked sun angle, shrunken. */
-        private float[] projectShadowCorners(Pose pose, float halfWidth, float halfHeight) {
+        private float[] projectShadowCorners(Pose pose, float halfWidth, float halfHeight,
+                float dx, float dz) {
             float w = halfWidth * SHADOW_SCALE;
             float h = halfHeight * SHADOW_SCALE;
+            float x = SHADOW_OFFSET_M + dx;
+            float z = SHADOW_OFFSET_M + dz;
             return projectQuad(pose, 0f, new float[][] {
-                    {-w + SHADOW_OFFSET_M, 0, -h + SHADOW_OFFSET_M},
-                    {w + SHADOW_OFFSET_M, 0, -h + SHADOW_OFFSET_M},
-                    {w + SHADOW_OFFSET_M, 0, h + SHADOW_OFFSET_M},
-                    {-w + SHADOW_OFFSET_M, 0, h + SHADOW_OFFSET_M},
+                    {x - w, 0, z - h},
+                    {x + w, 0, z - h},
+                    {x + w, 0, z + h},
+                    {x - w, 0, z + h},
             });
         }
 

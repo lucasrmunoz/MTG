@@ -37,15 +37,19 @@ public final class KeywordWheelView extends View {
         final String label;
         /** Already on the card as a counter: highlighted, and selecting removes it. */
         final boolean active;
-        /** Printed on the card itself: shown for completeness, never selectable. */
+        /** Printed on the card itself: shown for completeness, never removable. */
         final boolean locked;
+        /** A locked entry that still answers taps — printed Flying, whose selection toggles
+         *  the ability on and off without changing the segment's printed colour. */
+        final boolean toggleable;
         /** The "Custom…" tail: selecting opens the free-text dialog instead. */
         final boolean custom;
 
-        Entry(String label, boolean active, boolean locked, boolean custom) {
+        Entry(String label, boolean active, boolean locked, boolean toggleable, boolean custom) {
             this.label = label;
             this.active = active;
             this.locked = locked;
+            this.toggleable = toggleable;
             this.custom = custom;
         }
     }
@@ -486,7 +490,7 @@ public final class KeywordWheelView extends View {
     }
 
     private void select(Entry entry) {
-        if (entry.locked) {
+        if (entry.locked && !entry.toggleable) {
             return; // Printed keywords are part of the card; the wheel stays up.
         }
         performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
@@ -635,6 +639,8 @@ public final class KeywordWheelView extends View {
         String hint;
         if (entry.custom) {
             hint = "Type your own";
+        } else if (entry.locked && entry.toggleable) {
+            hint = "Printed — release to toggle";
         } else if (entry.locked) {
             hint = "Printed on card";
         } else {

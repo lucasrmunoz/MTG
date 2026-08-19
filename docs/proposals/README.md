@@ -13,3 +13,4 @@ depend on *shipped* features but never on another proposal.
 | [Guide-box scanning](guide-box-scanning.md) | Shipped 2026-08-06 |
 | [Full-card scanning with artwork identification](full-card-scanning.md) | Shelved (superseded by guide-box scanning; phase-0 tooling shipped) |
 | [Turn and reminder controls inside AR](ar-turn-reminder-controls.md) | Proposed |
+| [Token creation from scanned cards](token-creation-button.md) | Implemented 2026-08-19, awaiting commit |
