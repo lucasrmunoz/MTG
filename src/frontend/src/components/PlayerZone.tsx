@@ -31,6 +31,8 @@ interface PlayerZoneProps {
   onEndTurn: () => void;
   /** Moves the turn marker here — a correction, not a turn taken. */
   onSetActive: () => void;
+  /** Marks the player out of (or back into) the game; the turn order skips eliminated seats. */
+  onSetEliminated: (eliminated: boolean) => void;
   onAddReminder: (phase: ReminderPhase, text: string) => void;
   onDismissReminder: (reminderId: number) => void;
 }
@@ -59,6 +61,7 @@ export function PlayerZone({
   onPickCommander,
   onEndTurn,
   onSetActive,
+  onSetEliminated,
   onAddReminder,
   onDismissReminder,
 }: PlayerZoneProps) {
@@ -130,6 +133,7 @@ export function PlayerZone({
             onRename={onRename}
             onPickCommander={onPickCommander}
             onSetActive={onSetActive}
+            onSetEliminated={onSetEliminated}
             onAddReminder={onAddReminder}
             onDismissReminder={onDismissReminder}
             onClose={() => setMenuOpen(false)}
@@ -137,6 +141,8 @@ export function PlayerZone({
         ) : (
           <div
             className={`relative h-full w-full overflow-hidden rounded-xl border bg-gradient-to-b from-surface-raised to-surface select-none transition-shadow duration-150 ${
+              player.eliminated ? "opacity-40 grayscale" : ""
+            } ${
               isActive
                 ? "border-orange shadow-[0_0_0_1px_var(--orange),0_0_22px_-6px_rgba(230,126,34,0.6)]"
                 : "border-purple/30"
@@ -200,6 +206,7 @@ export function PlayerZone({
                 className="chip max-w-[90%] truncate px-3 py-1 text-sm backdrop-blur-sm bg-background-deep/70"
               >
                 {player.name}
+                {player.eliminated && <span className="text-foreground/60"> · Out</span>}
                 {player.commanderCasts > 0 && (
                   <span className="text-purple-light"> · Tax {commanderTax(player)}</span>
                 )}
@@ -293,7 +300,7 @@ function RotatedContent({
   );
 }
 
-/** The zone flipped to its settings: rename, commander, the tax stepper, turn, and reminders. */
+/** The zone flipped to its settings: rename, commander, tax, turn, elimination, reminders. */
 function ZoneMenu({
   player,
   isActive,
@@ -302,6 +309,7 @@ function ZoneMenu({
   onRename,
   onPickCommander,
   onSetActive,
+  onSetEliminated,
   onAddReminder,
   onDismissReminder,
   onClose,
@@ -313,6 +321,7 @@ function ZoneMenu({
   onRename: (name: string) => void;
   onPickCommander: () => void;
   onSetActive: () => void;
+  onSetEliminated: (eliminated: boolean) => void;
   onAddReminder: (phase: ReminderPhase, text: string) => void;
   onDismissReminder: (reminderId: number) => void;
   onClose: () => void;
@@ -382,13 +391,22 @@ function ZoneMenu({
       </div>
 
       <div className="flex flex-wrap items-center gap-2 text-sm">
-        {isActive ? (
+        {player.eliminated ? (
+          <span className="font-semibold text-foreground/60">Eliminated</span>
+        ) : isActive ? (
           <span className="text-orange font-semibold">Taking their turn</span>
         ) : (
           <button type="button" onClick={onSetActive} className="btn btn-ghost btn-xs">
             It&apos;s their turn
           </button>
         )}
+        <button
+          type="button"
+          onClick={() => onSetEliminated(!player.eliminated)}
+          className="btn btn-ghost btn-xs"
+        >
+          {player.eliminated ? "Back in the game" : "Eliminate"}
+        </button>
       </div>
 
       <ReminderEditor

@@ -11,6 +11,7 @@ interface GameBoardProps {
   onPickCommander: (playerId: number) => void;
   onEndTurn: () => void;
   onSetActive: (playerId: number) => void;
+  onSetEliminated: (playerId: number, eliminated: boolean) => void;
   onAddReminder: (playerId: number, phase: ReminderPhase, text: string) => void;
   onDismissReminder: (reminderId: number) => void;
 }
@@ -28,6 +29,7 @@ export function GameBoard({
   onPickCommander,
   onEndTurn,
   onSetActive,
+  onSetEliminated,
   onAddReminder,
   onDismissReminder,
 }: GameBoardProps) {
@@ -61,6 +63,7 @@ export function GameBoard({
             onPickCommander={() => onPickCommander(player.id)}
             onEndTurn={onEndTurn}
             onSetActive={() => onSetActive(player.id)}
+            onSetEliminated={(eliminated) => onSetEliminated(player.id, eliminated)}
             onAddReminder={(phase, text) => onAddReminder(player.id, phase, text)}
             onDismissReminder={onDismissReminder}
           />

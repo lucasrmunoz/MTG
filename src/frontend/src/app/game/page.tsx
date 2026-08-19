@@ -18,6 +18,7 @@ import {
   setActivePlayer,
   setCommander,
   setLayout,
+  setPlayerEliminated,
   setPlayerName,
   serializeGame,
   parseGame,
@@ -99,6 +100,11 @@ export default function GamePage() {
   }, []);
   const handleSetActive = useCallback((playerId: number) => {
     setGame((current) => (current === null ? current : setActivePlayer(current, playerId)));
+  }, []);
+  const handleSetEliminated = useCallback((playerId: number, eliminated: boolean) => {
+    setGame((current) =>
+      current === null ? current : setPlayerEliminated(current, playerId, eliminated),
+    );
   }, []);
   const handleAddReminder = useCallback(
     (playerId: number, phase: ReminderPhase, text: string) => {
@@ -216,6 +222,7 @@ export default function GamePage() {
           onPickCommander={setPickerFor}
           onEndTurn={handleEndTurn}
           onSetActive={handleSetActive}
+          onSetEliminated={handleSetEliminated}
           onAddReminder={handleAddReminder}
           onDismissReminder={handleDismissReminder}
         />

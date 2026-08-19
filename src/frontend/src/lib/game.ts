@@ -30,6 +30,8 @@ export interface Player {
   commander: CommanderCard | null;
   /** Casts from the command zone so far; the next cast costs {@link commanderTax} more. */
   commanderCasts: number;
+  /** Knocked out of the game: keeps their seat on the board, but the turn order skips them. */
+  eliminated: boolean;
 }
 
 /**
@@ -88,6 +90,7 @@ export function createGame(
       life: startingLife,
       commander: null,
       commanderCasts: 0,
+      eliminated: false,
     })),
     activePlayerId: 1,
     turn: 1,
@@ -104,8 +107,8 @@ export function createGame(
  */
 export function endTurn(game: GameState): GameState {
   const index = game.players.findIndex((player) => player.id === game.activePlayerId);
-  // An unknown active id lands at index -1, so (-1 + 1) % n safely restarts at seat order.
-  const next = game.players[(index + 1) % game.players.length];
+  // An unknown active id lands at index -1, so scanning from -1 safely restarts at seat order.
+  const next = nextLivePlayer(game, index);
   if (next === undefined) {
     return game;
   }
@@ -123,11 +126,27 @@ export function endTurn(game: GameState): GameState {
 }
 
 /**
+ * The next seat still in the game, scanning clockwise from the given index. Wraps the whole way
+ * around, so the last live player's turn comes back to them; undefined only when every seat is
+ * eliminated.
+ */
+function nextLivePlayer(game: GameState, fromIndex: number): Player | undefined {
+  for (let step = 1; step <= game.players.length; step += 1) {
+    const candidate = game.players[(fromIndex + step) % game.players.length];
+    if (candidate !== undefined && !candidate.eliminated) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+/**
  * Manually moves the turn marker — a correction, so the turn counter stays put. The chosen
- * player's reminders still come due: it is their turn now, however we got here.
+ * player's reminders still come due: it is their turn now, however we got here. An eliminated
+ * seat cannot take the marker.
  */
 export function setActivePlayer(game: GameState, playerId: number): GameState {
-  if (!game.players.some((player) => player.id === playerId)) {
+  if (!game.players.some((player) => player.id === playerId && !player.eliminated)) {
     return game;
   }
   return {
@@ -208,6 +227,18 @@ export function setCommander(
   commander: CommanderCard | null,
 ): GameState {
   return updatePlayer(game, playerId, (player) => ({ ...player, commander }));
+}
+
+/**
+ * Marks a player out of (or back into) the game. Their seat, life and reminders stay as they
+ * are — this only flips the flag the turn rotation and the board's dimming read.
+ */
+export function setPlayerEliminated(
+  game: GameState,
+  playerId: number,
+  eliminated: boolean,
+): GameState {
+  return updatePlayer(game, playerId, (player) => ({ ...player, eliminated }));
 }
 
 export function setLayout(game: GameState, layout: GameLayout): GameState {
@@ -429,12 +460,13 @@ function parsePlayer(entry: unknown): Player | null {
   if (!isRecord(entry)) {
     return null;
   }
-  const { id, name, life, commander, commanderCasts } = entry;
+  const { id, name, life, commander, commanderCasts, eliminated } = entry;
   if (
     typeof id !== "number" ||
     typeof name !== "string" ||
     typeof life !== "number" ||
-    typeof commanderCasts !== "number"
+    typeof commanderCasts !== "number" ||
+    (eliminated !== undefined && typeof eliminated !== "boolean")
   ) {
     return null;
   }
@@ -464,6 +496,8 @@ function parsePlayer(entry: unknown): Player | null {
     life,
     commander: parsedCommander,
     commanderCasts: Math.max(0, commanderCasts),
+    // Absent in saves that predate elimination; those players are all still in the game.
+    eliminated: eliminated === true,
   };
 }
 
@@ -478,28 +512,34 @@ function isNullableString(value: unknown): value is string | null | undefined {
 /**
  * The snapshot the AR screen works from. Players without a recognisable scan send card: null.
  * Turn and reminder info rides along as display data — the AR screen shows it but cannot
- * change it, so none of it is read back by {@link applyArPlayers}.
+ * change it, so none of it is read back by {@link applyArPlayers}. Eliminated players stay out
+ * of the snapshot entirely — the AR view shows the live table, and {@link applyArPlayers}
+ * ignores ids it does not get back, so their web-side values are untouched.
  */
 export function toArPlayers(game: GameState): ArGamePlayer[] {
-  return game.players.map((player) => ({
-    id: player.id,
-    name: player.name,
-    life: player.life,
-    commanderCasts: player.commanderCasts,
-    active: player.id === game.activePlayerId,
-    reminders: game.reminders
-      .filter((reminder) => reminder.playerId === player.id)
-      .map((reminder) => (reminder.due ? `❗ ${reminderLabel(reminder)}` : reminderLabel(reminder))),
-    card:
-      player.commander !== null && player.commander.imageUrl !== null
-        ? {
-            id: player.commander.id,
-            name: player.commander.name,
-            imageUrl: player.commander.imageUrl,
-            artCropUrl: player.commander.artCropUrl,
-          }
-        : null,
-  }));
+  return game.players
+    .filter((player) => !player.eliminated)
+    .map((player) => ({
+      id: player.id,
+      name: player.name,
+      life: player.life,
+      commanderCasts: player.commanderCasts,
+      active: player.id === game.activePlayerId,
+      reminders: game.reminders
+        .filter((reminder) => reminder.playerId === player.id)
+        .map((reminder) =>
+          reminder.due ? `❗ ${reminderLabel(reminder)}` : reminderLabel(reminder),
+        ),
+      card:
+        player.commander !== null && player.commander.imageUrl !== null
+          ? {
+              id: player.commander.id,
+              name: player.commander.name,
+              imageUrl: player.commander.imageUrl,
+              artCropUrl: player.commander.artCropUrl,
+            }
+          : null,
+    }));
 }
 
 /**
