@@ -81,6 +81,15 @@ final class CardIdentifier {
     /** Guide mode polls near back-to-back: the user is actively holding a card to be read. */
     private static final long GUIDE_ATTEMPT_INTERVAL_MS = 350;
 
+    /** Ambient OCR backs off after this long with no adoption and no deliberate scan action
+     *  (rescan, dismiss, guide toggle) — a settled table does not need hot polling. */
+    private static final long AMBIENT_IDLE_AFTER_MS = 12_000;
+
+    /** The idle cadence. Full-frame OCR every 700 ms all game long is the biggest app-side
+     *  thermal cost on top of ARCore itself; a slow poll still catches a newly laid card
+     *  within a few seconds, and its adoption snaps the cadence back to hot. */
+    private static final long AMBIENT_IDLE_INTERVAL_MS = 3000;
+
     /**
      * The camera sensor is landscape while the activity is locked to portrait, so frames reach
      * ML Kit rotated by 90 degrees. The corpus recorder stamps the same value into saved frames.
@@ -113,6 +122,11 @@ final class CardIdentifier {
 
     private volatile boolean recognizing;
     private long lastAttemptMs;
+
+    /** When scanning last made progress or was deliberately re-armed; written from the lookup
+     *  and main threads, read on the GL thread, hence volatile. Starts "now": a fresh session
+     *  is actively scanning. */
+    private volatile long lastScanActivityMs = SystemClock.elapsedRealtime();
 
     /**
      * View-space {left, top, right, bottom} of the on-screen guide box, or null for ambient
@@ -216,6 +230,8 @@ final class CardIdentifier {
 
     /** Confines scanning to a view-space box, or null to return to ambient frame-wide reads. */
     void setGuideBox(float[] viewBox) {
+        // Either direction is a deliberate camera interaction: ambient resumes hot after it.
+        lastScanActivityMs = SystemClock.elapsedRealtime();
         this.guideBox = viewBox;
         guideConsensus.reset();
         lastExactReadMs = 0;
@@ -228,7 +244,14 @@ final class CardIdentifier {
     /** Called from the GL thread once per rendered frame; does nothing most of the time. */
     void maybeIdentify(Frame frame) {
         long now = SystemClock.elapsedRealtime();
-        long interval = guideBox != null ? GUIDE_ATTEMPT_INTERVAL_MS : ATTEMPT_INTERVAL_MS;
+        long interval;
+        if (guideBox != null) {
+            interval = GUIDE_ATTEMPT_INTERVAL_MS;
+        } else if (now - lastScanActivityMs > AMBIENT_IDLE_AFTER_MS) {
+            interval = AMBIENT_IDLE_INTERVAL_MS;
+        } else {
+            interval = ATTEMPT_INTERVAL_MS;
+        }
         if (recognizing || now - lastAttemptMs < interval) {
             return;
         }
@@ -589,6 +612,7 @@ final class CardIdentifier {
             if (snapshot != null) {
                 // The key names the evidence tier (name:/title:/printing:) for diagnosis.
                 Log.i(TAG, "Adopted " + card.name + " via " + key);
+                lastScanActivityMs = SystemClock.elapsedRealtime();
                 listener.onCandidates(snapshot);
             }
         } catch (IOException e) {
@@ -621,6 +645,7 @@ final class CardIdentifier {
 
     /** Forgets a recognised card and refuses that name until the next {@link #rescan}. */
     synchronized void dismiss(String cardName) {
+        lastScanActivityMs = SystemClock.elapsedRealtime();
         String nameKey = cardName.toLowerCase();
         dismissedNames.add(nameKey);
         matchedByName.remove(nameKey);
@@ -638,6 +663,7 @@ final class CardIdentifier {
         if (lastScanNameKey == null) {
             return null;
         }
+        lastScanActivityMs = SystemClock.elapsedRealtime();
         Match removed = matchedByName.remove(lastScanNameKey);
         return removed == null ? null : removed.card.name;
     }
@@ -648,6 +674,7 @@ final class CardIdentifier {
      * cards are untouched — this only reopens what earlier passes closed off.
      */
     synchronized void rescan() {
+        lastScanActivityMs = SystemClock.elapsedRealtime();
         dismissedNames.clear();
         matchedByName.clear();
         rejected.clear();

@@ -2,6 +2,7 @@ package com.lucasmunoz.mtg.ar;
 
 import android.content.Context;
 import android.graphics.Bitmap;
+import android.graphics.BlurMaskFilter;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.DashPathEffect;
@@ -93,6 +94,9 @@ public final class CardOverlayView extends View {
 
         /** Game mode: a life token was tapped — its player should become the focused one. */
         default void onTokenTapped(int playerId) {}
+
+        /** Game mode: a life token drag left the tap slop — a table drop may follow. */
+        default void onTokenDragStarted() {}
 
         /** Game mode: a dragged life token was released here — try to anchor it to the table. */
         default void onTokenDropped(int playerId, float x, float y) {}
@@ -219,6 +223,9 @@ public final class CardOverlayView extends View {
         guideActivePaint.setColor(Color.argb(220, 46, 204, 113));
         shadowFill.setStyle(Paint.Style.FILL);
         shadowFill.setColor(Color.argb(80, 0, 0, 0));
+        // Soft edges read as a cast shadow rather than a dark card copy. Hardware canvases
+        // only honour mask filters on API 28+; older devices just get the hard-edged fill.
+        shadowFill.setMaskFilter(new BlurMaskFilter(dp(6), BlurMaskFilter.Blur.NORMAL));
         altitudePaint.setStyle(Paint.Style.STROKE);
         altitudePaint.setStrokeWidth(dp(2));
         altitudePaint.setColor(Color.argb(200, 46, 204, 113));
@@ -386,6 +393,9 @@ public final class CardOverlayView extends View {
                     draggingToken.dragY = event.getY();
                     if (Math.hypot(event.getX() - dragDownX, event.getY() - dragDownY)
                             > touchSlop) {
+                        if (!dragMoved && listener != null) {
+                            listener.onTokenDragStarted();
+                        }
                         dragMoved = true;
                     }
                     invalidate();

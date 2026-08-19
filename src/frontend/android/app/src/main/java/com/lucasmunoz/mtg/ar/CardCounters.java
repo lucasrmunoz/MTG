@@ -29,10 +29,15 @@ public final class CardCounters {
 
         /** Formats the kind alone, e.g. "+1/+1" or "-2/+3". */
         public String label() {
-            return (power >= 0 ? "+" + power : String.valueOf(power))
-                    + "/"
-                    + (toughness >= 0 ? "+" + toughness : String.valueOf(toughness));
+            return statLabel(power, toughness);
         }
+    }
+
+    /** Formats any stat pair the way counters are written, e.g. "+1/+1" or "-2/+3". */
+    public static String statLabel(int power, int toughness) {
+        return (power >= 0 ? "+" + power : String.valueOf(power))
+                + "/"
+                + (toughness >= 0 ? "+" + toughness : String.valueOf(toughness));
     }
 
     public final List<String> keywords = new ArrayList<>();
@@ -76,6 +81,24 @@ public final class CardCounters {
         stats.add(new StatCounter(power, toughness, 1));
     }
 
+    /**
+     * A dial or quick-spot tick with remove-first semantics: a delta that mirrors an existing
+     * counter kind peels one of those off (-1/-1 on a card holding +1/+1s removes one), and
+     * only past zero does the opposite kind get minted.
+     */
+    public void applyStatDelta(int power, int toughness) {
+        if (power == 0 && toughness == 0) {
+            return;
+        }
+        for (StatCounter stat : stats) {
+            if (stat.power == -power && stat.toughness == -toughness) {
+                removeStat(stat.power, stat.toughness);
+                return;
+            }
+        }
+        addStat(power, toughness);
+    }
+
     /** Removes one counter of the given kind; the entry disappears when none are left. */
     public void removeStat(int power, int toughness) {
         for (int i = 0; i < stats.size(); i++) {
@@ -88,6 +111,11 @@ public final class CardCounters {
                 return;
             }
         }
+    }
+
+    /** Drops every stat counter at once — the panel's reset button. Keywords stay. */
+    public void clearStats() {
+        stats.clear();
     }
 
     public int netPower() {

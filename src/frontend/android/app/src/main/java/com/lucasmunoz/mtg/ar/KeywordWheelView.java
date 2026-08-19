@@ -19,9 +19,16 @@ import java.util.List;
  * A radial keyword picker summoned by long-pressing a card: the presets fan out around the press
  * point in one or two rings, so granting a keyword counter is a flick instead of a dialog trip.
  * Segments the card already has as counters draw highlighted and remove on selection; the card's
- * printed keywords draw muted and are not selectable. Opened mid-gesture, the finger can drag
- * straight onto a segment and release to choose; lifting without choosing keeps the wheel up for
- * a plain tap, and tapping the hub or outside dismisses it.
+ * printed keywords draw muted and are not selectable.
+ *
+ * <p>Stat counters live in the same gesture. Rails above (power) and below (toughness) the wheel
+ * are rate joysticks: holding a finger right of the wheel's centre-line ticks the pending value
+ * up, left ticks it down, faster the farther out, and lifting commits the composed kind as one
+ * counter. Quick spots beside the wheel add the common kinds — -1/-1 on the left, +1/+1 on the
+ * right — one per tap, repeating while held.
+ *
+ * <p>The wheel is a multi-edit menu: every action applies immediately and the wheel stays up, so
+ * one visit can grant a counter and a keyword. Tapping the hub ✕ or dead space dismisses it.
  */
 public final class KeywordWheelView extends View {
 
@@ -46,7 +53,10 @@ public final class KeywordWheelView extends View {
     interface Listener {
         void onEntrySelected(Entry entry);
 
-        /** The wheel is leaving the screen — fired for selections and dismissals alike. */
+        /** A stat delta from a rail commit or a quick-spot tick, e.g. (+2, 0) or (-1, -1). */
+        void onStatApplied(int power, int toughness);
+
+        /** The wheel is leaving the screen — fired only for dismissals now, not selections. */
         void onDismissed();
     }
 
@@ -55,6 +65,19 @@ public final class KeywordWheelView extends View {
     private static final float HUB_RADIUS_DP = 32f;
     private static final float INNER_RADIUS_DP = 92f;
     private static final float OUTER_RADIUS_DP = 150f;
+    private static final float RAIL_GAP_DP = 12f;
+    private static final float RAIL_HEIGHT_DP = 44f;
+    private static final float SPOT_GAP_DP = 10f;
+    private static final float SPOT_RADIUS_DP = 26f;
+    /** No ticking this close to the centre-line, so hovering there parks the dial. */
+    private static final float RAIL_DEAD_ZONE_DP = 20f;
+    private static final float ZONE_SLOP_DP = 8f;
+    private static final long RAIL_TICK_SLOW_MS = 700;
+    private static final long RAIL_TICK_FAST_MS = 150;
+    private static final long SPOT_REPEAT_DELAY_MS = 500;
+    private static final long SPOT_REPEAT_START_MS = 550;
+    private static final long SPOT_REPEAT_STEP_MS = 50;
+    private static final long SPOT_REPEAT_FLOOR_MS = 160;
 
     private final Paint segmentPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint hoverGlow = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -63,7 +86,10 @@ public final class KeywordWheelView extends View {
     private final Paint labelPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint hubTitlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint hubHintPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint activeBorder = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF arcRect = new RectF();
+    private final RectF powerRail = new RectF();
+    private final RectF toughnessRail = new RectF();
 
     private Listener listener;
     private final List<Entry> entries = new ArrayList<>();
@@ -85,6 +111,23 @@ public final class KeywordWheelView extends View {
     private float openingStartY = Float.NaN;
     private boolean openingMoved;
     private boolean hiding;
+
+    private float leftSpotX;
+    private float rightSpotX;
+    private float spotRadius;
+    /** True from the finger entering a rail until lift (commit) or sliding back into the wheel
+     *  (cancel). While dialing, spots are inert and keyword segments dim and stop hovering. */
+    private boolean dialActive;
+    private int pendingPower;
+    private int pendingToughness;
+    private boolean railTickScheduled;
+    /** -1 while the -1/-1 spot is held, +1 for +1/+1, 0 otherwise. */
+    private int heldSpot;
+    private int spotTicks;
+    private float lastTouchX;
+    private float lastTouchY;
+    private final Runnable railTicker = this::railTick;
+    private final Runnable spotTicker = this::spotTick;
 
     public KeywordWheelView(Context context) {
         this(context, null);
@@ -112,6 +155,9 @@ public final class KeywordWheelView extends View {
         hubHintPaint.setTextAlign(Paint.Align.CENTER);
         hubHintPaint.setTextSize(dp(10));
         hubHintPaint.setShadowLayer(dp(3), 0, dp(1), Color.argb(220, 0, 0, 0));
+        activeBorder.setStyle(Paint.Style.STROKE);
+        activeBorder.setStrokeWidth(dp(2));
+        activeBorder.setColor(Color.argb(235, 230, 126, 34));
     }
 
     void setListener(Listener listener) {
@@ -134,9 +180,13 @@ public final class KeywordWheelView extends View {
         entries.addAll(newEntries);
         innerCount = Math.min(entries.size(), MAX_PER_RING);
 
-        // Shrink the whole wheel on screens too small for the full 300dp diameter.
-        float scale = Math.min(1f,
-                0.45f * Math.min(getWidth(), getHeight()) / dp(OUTER_RADIUS_DP));
+        // Shrink the whole wheel on screens too small for the full 300dp diameter plus the
+        // stat controls: quick spots need width beside the wheel, rails need height beyond it.
+        float sideExtra = dp(SPOT_GAP_DP) + 2 * dp(SPOT_RADIUS_DP) + dp(6);
+        float vertExtra = dp(RAIL_GAP_DP) + dp(RAIL_HEIGHT_DP) + dp(6);
+        float scale = Math.min(1f, Math.min(
+                (getWidth() / 2f - sideExtra) / dp(OUTER_RADIUS_DP),
+                (getHeight() / 2f - vertExtra) / dp(OUTER_RADIUS_DP)));
         hubRadius = dp(HUB_RADIUS_DP) * scale;
         innerRadius = dp(INNER_RADIUS_DP) * scale;
         outerRadius = dp(OUTER_RADIUS_DP) * scale;
@@ -144,12 +194,13 @@ public final class KeywordWheelView extends View {
             // One ring only: let it span the full band instead of leaving an empty outer ring.
             innerRadius = outerRadius;
         }
-        float margin = outerRadius + dp(6);
-        centerX = clamp(cx, margin, getWidth() - margin);
-        centerY = clamp(cy, margin, getHeight() - margin);
+        centerX = clamp(cx, outerRadius + sideExtra, getWidth() - outerRadius - sideExtra);
+        centerY = clamp(cy, outerRadius + vertExtra, getHeight() - outerRadius - vertExtra);
+        layoutStatControls();
         layoutLabels();
 
         hoverIndex = -1;
+        resetStatGesture();
         openingGesture = midGesture;
         openingStartX = Float.NaN;
         openingStartY = Float.NaN;
@@ -165,10 +216,26 @@ public final class KeywordWheelView extends View {
         invalidate();
     }
 
+    /**
+     * Swaps in freshly built entries after an action, keeping the wheel's geometry: the menu is
+     * persistent, so a just-toggled keyword must re-highlight without a close-and-reopen.
+     */
+    void refreshEntries(List<Entry> newEntries) {
+        if (!isShowing() || newEntries.isEmpty()) {
+            return;
+        }
+        entries.clear();
+        entries.addAll(newEntries);
+        innerCount = Math.min(entries.size(), MAX_PER_RING);
+        layoutLabels();
+        invalidate();
+    }
+
     void hide() {
         if (!isShowing()) {
             return;
         }
+        resetStatGesture();
         hiding = true;
         if (listener != null) {
             listener.onDismissed();
@@ -192,6 +259,8 @@ public final class KeywordWheelView extends View {
         if (!isShowing()) {
             return false;
         }
+        lastTouchX = event.getX();
+        lastTouchY = event.getY();
         if (openingGesture && !openingMoved) {
             if (Float.isNaN(openingStartX)) {
                 openingStartX = event.getX();
@@ -201,33 +270,208 @@ public final class KeywordWheelView extends View {
                 openingMoved = true;
             }
         }
-        int index = openingGesture && !openingMoved
-                ? -1 : segmentAt(event.getX(), event.getY());
+        boolean armed = !openingGesture || openingMoved;
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
             case MotionEvent.ACTION_MOVE:
-                setHover(index);
+                if (armed) {
+                    trackFinger(event.getX(), event.getY());
+                }
                 return true;
             case MotionEvent.ACTION_UP: {
                 boolean opening = openingGesture;
                 openingGesture = false;
+                boolean dialed = dialActive;
+                int spot = heldSpot;
+                int index = armed ? segmentAt(event.getX(), event.getY()) : -1;
                 setHover(-1);
-                if (index >= 0) {
+                if (dialed) {
+                    commitPending();
+                } else if (index >= 0) {
                     select(entries.get(index));
-                } else if (!opening) {
-                    // A tap on the hub or outside closes; the opening press lifting in place
-                    // instead parks the wheel in tap mode.
+                } else if (!opening && spot == 0
+                        && railAt(event.getX(), event.getY()) == 0
+                        && spotAt(event.getX(), event.getY()) == 0) {
+                    // A tap on the hub or dead space closes; the opening press lifting in place
+                    // instead parks the wheel as a persistent multi-edit menu.
                     hide();
                 }
+                resetStatGesture();
                 return true;
             }
             case MotionEvent.ACTION_CANCEL:
                 openingGesture = false;
                 setHover(-1);
+                resetStatGesture();
                 return true;
             default:
                 return true;
         }
+    }
+
+    /** Routes a moving finger to the dial rails, the quick spots, or keyword segment hover. */
+    private void trackFinger(float x, float y) {
+        if (dialActive) {
+            if (Math.hypot(x - centerX, y - centerY) <= outerRadius) {
+                // Sliding back into the wheel abandons the pending counter and re-arms keywords.
+                performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+                resetStatGesture();
+            } else {
+                // Still dialing: spots are inert, so the finger can travel around the wheel
+                // between rails without side effects. Ticking runs only inside a rail.
+                if (railAt(x, y) != 0 && !railTickScheduled && railInterval(x) > 0) {
+                    railTickScheduled = true;
+                    postDelayed(railTicker, railInterval(x));
+                }
+                invalidate();
+                return;
+            }
+        }
+        int rail = railAt(x, y);
+        if (rail != 0) {
+            stopSpotHold();
+            setHover(-1);
+            dialActive = true;
+            if (railInterval(x) > 0) {
+                railTickScheduled = true;
+                postDelayed(railTicker, railInterval(x));
+            }
+            invalidate();
+            return;
+        }
+        int spot = spotAt(x, y);
+        if (spot != heldSpot) {
+            stopSpotHold();
+            if (spot != 0) {
+                startSpotHold(spot);
+            }
+        }
+        if (spot != 0) {
+            setHover(-1);
+            return;
+        }
+        setHover(segmentAt(x, y));
+    }
+
+    /** One rail tick: nudge the pending stat by the finger's side of the centre-line. */
+    private void railTick() {
+        railTickScheduled = false;
+        int rail = dialActive ? railAt(lastTouchX, lastTouchY) : 0;
+        long interval = railInterval(lastTouchX);
+        if (rail == 0 || interval <= 0) {
+            return; // Left the rail or parked on the centre-line; movement reschedules.
+        }
+        int sign = lastTouchX > centerX ? 1 : -1;
+        if (rail == 1) {
+            pendingPower += sign;
+        } else {
+            pendingToughness += sign;
+        }
+        performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+        invalidate();
+        railTickScheduled = true;
+        postDelayed(railTicker, interval);
+    }
+
+    /** Tick period for a finger at x: slow near the centre-line, fast far out; 0 in the dead
+     *  zone, so the dial parks instead of creeping. */
+    private long railInterval(float x) {
+        float offset = Math.abs(x - centerX) - dp(RAIL_DEAD_ZONE_DP);
+        if (offset <= 0) {
+            return 0;
+        }
+        float reach = Math.max(dp(1), powerRail.width() / 2f - dp(RAIL_DEAD_ZONE_DP));
+        float speed = Math.min(1f, offset / reach);
+        return (long) (RAIL_TICK_SLOW_MS - speed * (RAIL_TICK_SLOW_MS - RAIL_TICK_FAST_MS));
+    }
+
+    private void commitPending() {
+        if (pendingPower == 0 && pendingToughness == 0) {
+            return; // Dialed back to nothing: a clean cancel.
+        }
+        performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+        if (listener != null) {
+            listener.onStatApplied(pendingPower, pendingToughness);
+        }
+    }
+
+    /** Entering a spot applies one counter at once — a tap is one tick — then repeats while
+     *  held, starting slow and accelerating. */
+    private void startSpotHold(int spot) {
+        heldSpot = spot;
+        spotTicks = 0;
+        applySpotTick();
+        postDelayed(spotTicker, SPOT_REPEAT_DELAY_MS);
+    }
+
+    private void spotTick() {
+        if (heldSpot == 0) {
+            return;
+        }
+        applySpotTick();
+        spotTicks++;
+        postDelayed(spotTicker, Math.max(SPOT_REPEAT_FLOOR_MS,
+                SPOT_REPEAT_START_MS - spotTicks * SPOT_REPEAT_STEP_MS));
+    }
+
+    private void applySpotTick() {
+        performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+        if (listener != null) {
+            listener.onStatApplied(heldSpot, heldSpot);
+        }
+        invalidate();
+    }
+
+    private void stopSpotHold() {
+        removeCallbacks(spotTicker);
+        if (heldSpot != 0) {
+            heldSpot = 0;
+            invalidate();
+        }
+    }
+
+    /** Clears all per-touch stat state: pending dial, scheduled ticks, and a held spot. */
+    private void resetStatGesture() {
+        removeCallbacks(railTicker);
+        railTickScheduled = false;
+        dialActive = false;
+        pendingPower = 0;
+        pendingToughness = 0;
+        stopSpotHold();
+        invalidate();
+    }
+
+    /** 1 for the power rail, 2 for toughness, 0 elsewhere, with a little touch slop. */
+    private int railAt(float x, float y) {
+        float slop = dp(ZONE_SLOP_DP);
+        if (x >= powerRail.left - slop && x <= powerRail.right + slop
+                && y >= powerRail.top - slop && y <= powerRail.bottom + slop) {
+            return 1;
+        }
+        if (x >= toughnessRail.left - slop && x <= toughnessRail.right + slop
+                && y >= toughnessRail.top - slop && y <= toughnessRail.bottom + slop) {
+            return 2;
+        }
+        return 0;
+    }
+
+    /** -1 for the -1/-1 spot, +1 for +1/+1, 0 elsewhere. */
+    private int spotAt(float x, float y) {
+        float reach = spotRadius + dp(ZONE_SLOP_DP);
+        if (Math.hypot(x - leftSpotX, y - centerY) <= reach) {
+            return -1;
+        }
+        if (Math.hypot(x - rightSpotX, y - centerY) <= reach) {
+            return 1;
+        }
+        return 0;
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        removeCallbacks(railTicker);
+        removeCallbacks(spotTicker);
+        super.onDetachedFromWindow();
     }
 
     private void setHover(int index) {
@@ -246,10 +490,19 @@ public final class KeywordWheelView extends View {
             return; // Printed keywords are part of the card; the wheel stays up.
         }
         performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
-        Listener chosen = listener;
-        hide();
-        if (chosen != null) {
-            chosen.onEntrySelected(entry);
+        if (entry.custom) {
+            // The free-text dialog needs the screen, so only Custom… still closes the wheel.
+            Listener chosen = listener;
+            hide();
+            if (chosen != null) {
+                chosen.onEntrySelected(entry);
+            }
+            return;
+        }
+        // Persistent menu: the action applies now and the wheel stays up for more edits;
+        // the listener re-supplies entries via refreshEntries() so the toggle re-highlights.
+        if (listener != null) {
+            listener.onEntrySelected(entry);
         }
     }
 
@@ -287,6 +540,7 @@ public final class KeywordWheelView extends View {
         if (hoverIndex >= 0) {
             drawSegment(canvas, hoverIndex, true);
         }
+        drawStatControls(canvas);
 
         canvas.drawCircle(centerX, centerY, hubRadius, hubFill);
         canvas.drawCircle(centerX, centerY, hubRadius, hubBorder);
@@ -312,7 +566,13 @@ public final class KeywordWheelView extends View {
         arcRect.set(centerX - mid, centerY - mid, centerX + mid, centerY + mid);
 
         segmentPaint.setStrokeWidth(bandOut - bandIn);
-        segmentPaint.setColor(segmentColor(entries.get(index)));
+        int color = segmentColor(entries.get(index));
+        if (dialActive) {
+            // The dial owns the gesture: recede the keyword ring to a faint outline.
+            color = Color.argb(Color.alpha(color) / 3,
+                    Color.red(color), Color.green(color), Color.blue(color));
+        }
+        segmentPaint.setColor(color);
         canvas.drawArc(arcRect, start, sweep - GAP_DEGREES, false, segmentPaint);
         if (hovered) {
             hoverGlow.setStrokeWidth(bandOut - bandIn);
@@ -343,7 +603,8 @@ public final class KeywordWheelView extends View {
         String[] lines = entryLines.get(index);
         float textSize = entryTextSizes.get(index);
         labelPaint.setTextSize(textSize);
-        labelPaint.setAlpha(entries.get(index).locked ? 170 : 255);
+        int alpha = entries.get(index).locked ? 170 : 255;
+        labelPaint.setAlpha(dialActive ? alpha / 3 : alpha);
         float lineHeight = textSize * 1.15f;
         float firstY = y - lineHeight * (lines.length - 1) / 2f;
         for (int k = 0; k < lines.length; k++) {
@@ -353,6 +614,16 @@ public final class KeywordWheelView extends View {
 
     /** The hub names the hovered keyword in full — labels out on the rings can be tight. */
     private void drawHubText(Canvas canvas) {
+        if (dialActive) {
+            // Live readout of the counter being composed on the rails.
+            hubTitlePaint.setTextSize(dp(15));
+            canvas.drawText(CardCounters.statLabel(pendingPower, pendingToughness),
+                    centerX, centerY - dp(2), hubTitlePaint);
+            String hint = pendingPower == 0 && pendingToughness == 0
+                    ? "Slide left / right" : "Release to apply";
+            canvas.drawText(hint, centerX, centerY + dp(12), hubHintPaint);
+            return;
+        }
         if (hoverIndex < 0) {
             hubTitlePaint.setTextSize(dp(16));
             canvas.drawText("✕", centerX, centerY + dp(16) * 0.35f, hubTitlePaint);
@@ -370,6 +641,62 @@ public final class KeywordWheelView extends View {
             hint = entry.active ? "Release to remove" : "Release to add";
         }
         canvas.drawText(hint, centerX, centerY + dp(12), hubHintPaint);
+    }
+
+    /** Positions the power/toughness rails and the ±1/±1 quick spots around the wheel. */
+    private void layoutStatControls() {
+        float railHalfWidth = Math.min(outerRadius + dp(SPOT_GAP_DP), getWidth() / 2f - dp(8));
+        float gap = dp(RAIL_GAP_DP);
+        float height = dp(RAIL_HEIGHT_DP);
+        powerRail.set(centerX - railHalfWidth, centerY - outerRadius - gap - height,
+                centerX + railHalfWidth, centerY - outerRadius - gap);
+        toughnessRail.set(centerX - railHalfWidth, centerY + outerRadius + gap,
+                centerX + railHalfWidth, centerY + outerRadius + gap + height);
+        spotRadius = dp(SPOT_RADIUS_DP);
+        leftSpotX = centerX - outerRadius - dp(SPOT_GAP_DP) - spotRadius;
+        rightSpotX = centerX + outerRadius + dp(SPOT_GAP_DP) + spotRadius;
+    }
+
+    private void drawStatControls(Canvas canvas) {
+        int engagedRail = dialActive ? railAt(lastTouchX, lastTouchY) : 0;
+        drawRail(canvas, powerRail, "POWER", engagedRail == 1);
+        drawRail(canvas, toughnessRail, "TOUGHNESS", engagedRail == 2);
+        drawSpot(canvas, leftSpotX, "-1/-1", heldSpot == -1);
+        drawSpot(canvas, rightSpotX, "+1/+1", heldSpot == 1);
+    }
+
+    /** A rail: rounded bar with −/+ ends, a centre-line notch, and a finger marker while
+     *  engaged — right of the notch ticks up, left ticks down, farther is faster. */
+    private void drawRail(Canvas canvas, RectF rail, String name, boolean engaged) {
+        float corner = rail.height() / 2f;
+        canvas.drawRoundRect(rail, corner, corner, hubFill);
+        canvas.drawRoundRect(rail, corner, corner, engaged ? activeBorder : hubBorder);
+
+        float midY = rail.centerY();
+        canvas.drawLine(centerX, midY - dp(6), centerX, midY + dp(6),
+                engaged ? activeBorder : hubBorder);
+
+        labelPaint.setTextSize(dp(11));
+        labelPaint.setAlpha(engaged || !dialActive ? 255 : 130);
+        canvas.drawText(name, centerX, midY + dp(4), labelPaint);
+        labelPaint.setTextSize(dp(14));
+        canvas.drawText("−", rail.left + dp(16), midY + dp(5), labelPaint);
+        canvas.drawText("+", rail.right - dp(16), midY + dp(5), labelPaint);
+
+        if (engaged) {
+            float markerX = clamp(lastTouchX, rail.left + dp(8), rail.right - dp(8));
+            canvas.drawLine(markerX, rail.top + dp(4), markerX, rail.bottom - dp(4),
+                    activeBorder);
+        }
+    }
+
+    private void drawSpot(Canvas canvas, float spotX, String label, boolean held) {
+        canvas.drawCircle(spotX, centerY, spotRadius, hubFill);
+        canvas.drawCircle(spotX, centerY, spotRadius, held ? activeBorder : hubBorder);
+        labelPaint.setTextSize(dp(11));
+        // Spots are inert while a rail dial is in flight; fade them so that reads at a glance.
+        labelPaint.setAlpha(dialActive ? 85 : 255);
+        canvas.drawText(label, spotX, centerY + dp(4), labelPaint);
     }
 
     /** Splits each label into at most two lines and shrinks it until it fits its segment. */

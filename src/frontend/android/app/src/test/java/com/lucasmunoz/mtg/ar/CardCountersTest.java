@@ -49,7 +49,68 @@ public class CardCountersTest {
     public void zeroZeroStatIsMeaninglessAndIgnored() {
         CardCounters counters = new CardCounters();
         counters.addStat(0, 0);
+        counters.applyStatDelta(0, 0);
         assertTrue(counters.isEmpty());
+    }
+
+    @Test
+    public void statDeltaPeelsMirroredCountersBeforeMintingTheOpposite() {
+        CardCounters counters = new CardCounters();
+        counters.addStat(1, 1);
+        counters.addStat(1, 1);
+
+        counters.applyStatDelta(-1, -1);
+        assertEquals(1, counters.stats.get(0).count);
+
+        counters.applyStatDelta(-1, -1);
+        assertTrue(counters.stats.isEmpty());
+
+        counters.applyStatDelta(-1, -1);
+        assertEquals("-1/-1", counters.stats.get(0).label());
+        assertEquals(1, counters.stats.get(0).count);
+    }
+
+    @Test
+    public void statDeltaOnlyPeelsExactMirrors() {
+        CardCounters counters = new CardCounters();
+        counters.addStat(2, 2);
+
+        counters.applyStatDelta(-1, -1);
+        assertEquals(2, counters.stats.size());
+        assertEquals("+2/+2", counters.stats.get(0).label());
+        assertEquals("-1/-1", counters.stats.get(1).label());
+
+        counters.applyStatDelta(-2, -2);
+        assertEquals(1, counters.stats.size());
+        assertEquals("-1/-1", counters.stats.get(0).label());
+    }
+
+    @Test
+    public void statDeltaAddsFreshAsymmetricKinds() {
+        CardCounters counters = new CardCounters();
+        counters.applyStatDelta(2, 0);
+        counters.applyStatDelta(2, 0);
+        counters.applyStatDelta(0, -1);
+
+        assertEquals(2, counters.stats.size());
+        assertEquals("+2/+0", counters.stats.get(0).label());
+        assertEquals(2, counters.stats.get(0).count);
+        assertEquals("+0/-1", counters.stats.get(1).label());
+
+        counters.applyStatDelta(-2, 0);
+        assertEquals(1, counters.stats.get(0).count);
+    }
+
+    @Test
+    public void clearStatsDropsCountersButKeepsKeywords() {
+        CardCounters counters = new CardCounters();
+        counters.addKeyword("Flying");
+        counters.addStat(1, 1);
+        counters.addStat(-2, 3);
+
+        counters.clearStats();
+        assertTrue(counters.stats.isEmpty());
+        assertEquals(1, counters.keywords.size());
     }
 
     @Test

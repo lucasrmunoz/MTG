@@ -82,6 +82,15 @@
                 android:text="@string/ar_capture"
                 android:visibility="gone" />
 
+            <!-- Ambient animations (the Flying bob); off leaves the static lifted pose. -->
+            <Button
+                android:id="@+id/ar_anim"
+                style="@style/ArPillButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="8dp"
+                android:text="@string/ar_anim_on" />
+
             <!-- Clears the scanner's memory — removed and rejected readings get a fresh try. -->
             <Button
                 android:id="@+id/ar_rescan"
@@ -194,6 +203,11 @@
                     android:id="@+id/ar_stat_custom"
                     style="@style/ArStatButton"
                     android:text="@string/ar_stat_custom" />
+
+                <Button
+                    android:id="@+id/ar_stat_reset"
+                    style="@style/ArStatButton"
+                    android:text="@string/ar_stat_reset" />
             </LinearLayout>
 
             <!-- Game mode only: the focused player's life stepper. -->

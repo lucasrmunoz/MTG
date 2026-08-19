@@ -13,6 +13,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.util.Log;
+import android.util.Size;
 import android.view.HapticFeedbackConstants;
 import android.view.Surface;
 import android.view.View;
@@ -35,6 +36,8 @@ import com.google.ar.core.ArCoreApk;
 import com.google.ar.core.AugmentedImage;
 import com.google.ar.core.AugmentedImageDatabase;
 import com.google.ar.core.Camera;
+import com.google.ar.core.CameraConfig;
+import com.google.ar.core.CameraConfigFilter;
 import com.google.ar.core.Config;
 import com.google.ar.core.Frame;
 import com.google.ar.core.HitResult;
@@ -52,6 +55,7 @@ import com.lucasmunoz.mtg.R;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -99,6 +103,15 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     private static final float CARD_HEIGHT_M = 0.088f;
     /** How high a Flying card hovers above its anchor — enough to read as airborne. */
     private static final float FLY_HEIGHT_M = 0.05f;
+    /** A flyer bobs ± this much around FLY_HEIGHT_M so the hover is visible motion, not just
+     *  scale — straight-down views project pure lift as nothing but a bigger card. */
+    private static final float FLY_BOB_M = 0.012f;
+    private static final long FLY_BOB_PERIOD_MS = 2600;
+    /** A faked sun angle pushes the shadow sideways out from under the card; straight down it
+     *  would hide entirely behind the lifted quad and the altitude would not read. */
+    private static final float SHADOW_OFFSET_M = 0.02f;
+    /** Shadows shrink a little with altitude, reinforcing the height read. */
+    private static final float SHADOW_SCALE = 0.85f;
 
     private static final int CAMERA_PERMISSION_CODE = 41;
     private static final int MAX_REFERENCE_IMAGES_PER_CARD = 12;
@@ -143,6 +156,26 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     private GLSurfaceView surfaceView;
     private CardOverlayView overlay;
     private KeywordWheelView keywordWheel;
+    /** Read on the GL thread: while the wheel is up, new-card scanning pauses so mid-edit
+     *  frames can't spawn cards or duplicate-scan toasts under the menu. */
+    private volatile boolean keywordWheelOpen;
+
+    /** Plane finding stays hot this long after the last placement-intent signal — continuous
+     *  plane detection is CPU work the table only needs around placements. */
+    private static final long PLANE_IDLE_AFTER_MS = 20_000;
+
+    /** When a surface placement last became plausible: session start, the card list opening,
+     *  a placement arming, a token drag starting, a scan action. Read on the GL thread. */
+    private volatile long lastPlacementIntentMs = SystemClock.elapsedRealtime();
+
+    /** Mirrors the plane-finding mode the session's config currently carries. Flipped only on
+     *  the GL thread; the reconfigure itself runs on the database executor. */
+    private volatile boolean planeFindingOn = true;
+
+    private static final String PREF_ANIMATIONS = "animations";
+    /** Ambient animations (the Flying bob). Read on the GL thread per frame, toggled from the
+     *  Motion pill on the UI thread; off leaves flyers at the static lifted pose. */
+    private volatile boolean animationsEnabled = true;
     private TextView statusText;
     private LinearLayout chipRow;
     private TextView taxLabel;
@@ -271,15 +304,21 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         cardList = findViewById(R.id.ar_card_list);
         cardsToggle.setOnClickListener(v -> {
             cardListOpen = !cardListOpen;
+            notePlacementIntent(); // Browsing the list often ends in a tap-to-place.
             refreshCardList();
         });
         findViewById(R.id.ar_rescan).setOnClickListener(v -> {
             if (identifier != null) {
                 identifier.rescan();
+                notePlacementIntent();
                 Toast.makeText(this, R.string.ar_rescan_toast, Toast.LENGTH_SHORT).show();
             }
         });
-        findViewById(R.id.ar_guide).setOnClickListener(v -> toggleGuideBox((Button) v));
+        findViewById(R.id.ar_guide).setOnClickListener(v -> {
+            toggleGuideBox((Button) v);
+            notePlacementIntent();
+        });
+        wireAnimationsToggle();
         panel = findViewById(R.id.ar_panel);
         panelTitle = findViewById(R.id.ar_panel_title);
         overlay = findViewById(R.id.ar_overlay);
@@ -302,10 +341,23 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                     counters.addKeyword(entry.label);
                 }
                 persistAndRefresh();
+                // The wheel stays up for more edits; re-highlight the toggled segment.
+                keywordWheel.refreshEntries(buildWheelEntries());
+            }
+
+            @Override
+            public void onStatApplied(int power, int toughness) {
+                CardCounters counters = focusedCounters();
+                if (counters == null) {
+                    return;
+                }
+                counters.applyStatDelta(power, toughness);
+                persistAndRefresh();
             }
 
             @Override
             public void onDismissed() {
+                keywordWheelOpen = false;
                 overlay.setTouchRelay(null);
             }
         });
@@ -893,11 +945,39 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         }
     }
 
+    /**
+     * Caps camera capture at 30 fps and refuses the depth sensor. ARCore prioritises 60 fps
+     * and depth-sensor configs on devices that offer them; both cost battery and heat and
+     * neither helps a card table. Must run before the session's first resume, while no
+     * trackables exist yet.
+     */
+    private static void applyCoolCameraConfig(Session session) {
+        Size defaultImageSize = session.getCameraConfig().getImageSize();
+        CameraConfigFilter filter = new CameraConfigFilter(session);
+        filter.setTargetFps(EnumSet.of(CameraConfig.TargetFps.TARGET_FPS_30));
+        filter.setDepthSensorUsage(EnumSet.of(CameraConfig.DepthSensorUsage.DO_NOT_USE));
+        List<CameraConfig> configs = session.getSupportedCameraConfigs(filter);
+        if (configs.isEmpty()) {
+            return;
+        }
+        // Keep the default CPU image resolution — OCR and image tracking both feed on it;
+        // only the frame rate and depth usage should change.
+        CameraConfig chosen = configs.get(0);
+        for (CameraConfig candidate : configs) {
+            if (candidate.getImageSize().equals(defaultImageSize)) {
+                chosen = candidate;
+                break;
+            }
+        }
+        session.setCameraConfig(chosen);
+    }
+
     private Config buildConfig(AugmentedImageDatabase database) {
         Config config = new Config(session);
         config.setFocusMode(Config.FocusMode.AUTO);
         config.setUpdateMode(Config.UpdateMode.LATEST_CAMERA_IMAGE);
-        config.setPlaneFindingMode(Config.PlaneFindingMode.HORIZONTAL);
+        config.setPlaneFindingMode(planeFindingOn
+                ? Config.PlaneFindingMode.HORIZONTAL : Config.PlaneFindingMode.DISABLED);
         config.setLightEstimationMode(Config.LightEstimationMode.DISABLED);
         if (database != null) {
             config.setAugmentedImageDatabase(database);
@@ -948,6 +1028,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                     return false;
                 }
                 session = new Session(this);
+                applyCoolCameraConfig(session);
                 session.configure(buildConfig(null));
                 // A new session starts with an empty database; the sync below rebuilds it from
                 // whatever cards are already adopted.
@@ -1085,6 +1166,12 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     }
 
     @Override
+    public void onTokenDragStarted() {
+        // The drop's hit test is seconds away; wake plane finding so the table is mapped.
+        notePlacementIntent();
+    }
+
+    @Override
     public void onTokenDropped(int playerId, float x, float y) {
         // Anchoring needs a hit test against the AR frame, which only the GL thread can run.
         pendingTokenX = x;
@@ -1166,6 +1253,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             onFocusChanged(card.key);
         } else {
             pendingPlacementKey = card.key;
+            notePlacementIntent();
         }
         refreshCardList();
         updateStatusLine();
@@ -1187,6 +1275,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         }
         card.located = false;
         pendingPlacementKey = card.key;
+        notePlacementIntent();
         cardListOpen = false;
         refreshCardList();
         updateStatusLine();
@@ -1289,6 +1378,30 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         return game == null || playerId < 0 ? null : game.playerById(playerId);
     }
 
+    /** Keeps plane finding hot for a while: call whenever a surface placement could follow. */
+    private void notePlacementIntent() {
+        lastPlacementIntentMs = SystemClock.elapsedRealtime();
+    }
+
+    /** The Motion pill: ambient animations on or off, remembered across sessions. */
+    private void wireAnimationsToggle() {
+        Button button = findViewById(R.id.ar_anim);
+        animationsEnabled = getPreferences(MODE_PRIVATE).getBoolean(PREF_ANIMATIONS, true);
+        applyAnimationsPill(button);
+        button.setOnClickListener(v -> {
+            animationsEnabled = !animationsEnabled;
+            getPreferences(MODE_PRIVATE).edit()
+                    .putBoolean(PREF_ANIMATIONS, animationsEnabled).apply();
+            applyAnimationsPill(button);
+        });
+    }
+
+    /** Label and dimming agree on the state, so "on/off" cannot read as the tap's action. */
+    private void applyAnimationsPill(Button button) {
+        button.setText(animationsEnabled ? R.string.ar_anim_on : R.string.ar_anim_off);
+        button.setAlpha(animationsEnabled ? 1f : 0.45f);
+    }
+
     private void wireCounterControls() {
         findViewById(R.id.ar_close).setOnClickListener(v -> finish());
         wireStatButton(R.id.ar_stat_pp, 1, 1);
@@ -1296,6 +1409,14 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         wireStatButton(R.id.ar_stat_pm, 1, -1);
         wireStatButton(R.id.ar_stat_mp, -1, 1);
         findViewById(R.id.ar_stat_custom).setOnClickListener(v -> showCustomStatDialog());
+        findViewById(R.id.ar_stat_reset).setOnClickListener(v -> {
+            CardCounters counters = focusedCounters();
+            if (counters == null || counters.stats.isEmpty()) {
+                return;
+            }
+            counters.clearStats();
+            persistAndRefresh();
+        });
         findViewById(R.id.ar_keyword).setOnClickListener(v ->
                 showKeywordWheel(overlay.getWidth() / 2f, overlay.getHeight() / 2f, false));
         findViewById(R.id.ar_set_commander).setOnClickListener(v -> {
@@ -1409,12 +1530,28 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
      * overlay relays it to the wheel for drag-and-release selection.
      */
     private void showKeywordWheel(float x, float y, boolean midGesture) {
-        CardCounters counters = focusedCounters();
-        ActiveCard card = focusedKey == null ? null : cardsByKey.get(focusedKey);
-        if (counters == null || card == null) {
+        List<KeywordWheelView.Entry> entries = buildWheelEntries();
+        if (entries.isEmpty()) {
             return; // Commanders carry player life, not counters — no wheel for them.
         }
+        keywordWheel.show(x, y, entries, midGesture);
+        if (keywordWheel.isShowing()) {
+            // Only relay touches once the wheel is really up — a bailed show() with the relay
+            // set would swallow every touch into an invisible view.
+            overlay.setTouchRelay(keywordWheel);
+            keywordWheelOpen = true;
+            overlay.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+        }
+    }
+
+    /** The wheel's entries for the focused card, or empty when nothing focusable holds counters. */
+    private List<KeywordWheelView.Entry> buildWheelEntries() {
+        CardCounters counters = focusedCounters();
+        ActiveCard card = focusedKey == null ? null : cardsByKey.get(focusedKey);
         List<KeywordWheelView.Entry> entries = new ArrayList<>();
+        if (counters == null || card == null) {
+            return entries;
+        }
         for (String preset : getResources().getStringArray(R.array.ar_keyword_presets)) {
             entries.add(new KeywordWheelView.Entry(preset,
                     containsIgnoreCase(counters.keywords, preset),
@@ -1423,13 +1560,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         }
         entries.add(new KeywordWheelView.Entry(
                 getString(R.string.ar_keyword_custom), false, false, true));
-        keywordWheel.show(x, y, entries, midGesture);
-        if (keywordWheel.isShowing()) {
-            // Only relay touches once the wheel is really up — a bailed show() with the relay
-            // set would swallow every touch into an invisible view.
-            overlay.setTouchRelay(keywordWheel);
-            overlay.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
-        }
+        return entries;
     }
 
     private static boolean containsIgnoreCase(List<String> list, String value) {
@@ -1766,7 +1897,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
 
                 backgroundRenderer.draw(frame);
                 Camera camera = frame.getCamera();
-                if (identifier != null) {
+                if (identifier != null && !keywordWheelOpen) {
                     identifier.maybeIdentify(frame);
                 }
                 if (frameRecorder != null) {
@@ -1775,6 +1906,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 updateTrackedImages(frame);
                 handlePendingTap(frame);
                 handlePendingTokenDrop(frame);
+                updatePlaneFinding();
                 overlay.postGeometry(computePoses(camera), computeTokenPoses(camera));
             }
         }
@@ -2002,14 +2134,17 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
 
             float halfWidth = card.halfWidthM;
             float halfHeight = card.halfHeightM;
-            // A Flying card renders lifted along the pose's up axis; everything else at 0.
+            // A Flying card renders lifted along WORLD up (gravity), not the pose's own up
+            // axis: a feature-point anchor's basis can face the camera, which would turn the
+            // lift into a pure move-closer with no visible altitude.
             boolean flying = card.flying;
-            float lift = flying ? FLY_HEIGHT_M : 0f;
+            float lift = flying ? flyLift() : 0f;
             float[] corners = projectCorners(pose, halfWidth, halfHeight, lift);
             if (corners == null) {
                 return null;
             }
-            float[] center = projectToScreen(pose.transformPoint(new float[] {0, lift, 0}));
+            float[] center = projectToScreen(
+                    new float[] {pose.tx(), pose.ty() + lift, pose.tz()});
             if (center == null) {
                 return null;
             }
@@ -2020,8 +2155,9 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             if (flying) {
                 // The ground shadow needs the table-level geometry too. Losing it to a
                 // projection edge case loses only the shadow, never the card itself.
-                float[] ground = projectToScreen(new float[] {pose.tx(), pose.ty(), pose.tz()});
-                float[] shadowCorners = projectCorners(pose, halfWidth, halfHeight, 0f);
+                float[] ground = projectToScreen(pose.transformPoint(
+                        new float[] {SHADOW_OFFSET_M, 0, SHADOW_OFFSET_M}));
+                float[] shadowCorners = projectShadowCorners(pose, halfWidth, halfHeight);
                 if (ground != null && shadowCorners != null) {
                     out.flying = true;
                     out.shadowCorners = shadowCorners;
@@ -2029,7 +2165,8 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                     out.groundY = ground[1];
                 }
             } else if (card.reach) {
-                float[] sky = projectToScreen(pose.transformPoint(new float[] {0, FLY_HEIGHT_M, 0}));
+                float[] sky = projectToScreen(
+                        new float[] {pose.tx(), pose.ty() + FLY_HEIGHT_M, pose.tz()});
                 if (sky != null) {
                     out.reach = true;
                     out.skyX = sky[0];
@@ -2039,18 +2176,79 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             return out;
         }
 
-        /** The card's four corners at the given height above its pose, projected to screen.
+        /**
+         * GL thread, every frame: turns plane finding off once no placement is plausible and
+         * back on when one is. Hit tests fall back to feature points either way, so a placement
+         * during the re-finding beat degrades instead of failing. The reconfigure runs on the
+         * database executor so it serialises with database rebuilds touching the same session.
+         */
+        private void updatePlaneFinding() {
+            boolean want = pendingPlacementKey != null
+                    || SystemClock.elapsedRealtime() - lastPlacementIntentMs < PLANE_IDLE_AFTER_MS
+                    || anyCardUnlocated();
+            if (want == planeFindingOn) {
+                return;
+            }
+            planeFindingOn = want;
+            executor.execute(() -> {
+                synchronized (sessionLock) {
+                    if (session != null) {
+                        session.configure(buildConfig(database));
+                    }
+                }
+            });
+        }
+
+        private boolean anyCardUnlocated() {
+            for (ActiveCard card : cardOrder) {
+                if (!card.located) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /** The altitude of a flyer right now: base height plus a slow sine bob, unless the
+         *  Motion toggle stilled it — then the static lift (and offset shadow) carry it. */
+        private float flyLift() {
+            if (!animationsEnabled) {
+                return FLY_HEIGHT_M;
+            }
+            double phase = (SystemClock.uptimeMillis() % FLY_BOB_PERIOD_MS)
+                    / (double) FLY_BOB_PERIOD_MS;
+            return FLY_HEIGHT_M + FLY_BOB_M * (float) Math.sin(phase * 2 * Math.PI);
+        }
+
+        /** The card's four corners lifted the given height along WORLD up, projected to screen.
          *  The image lies in the pose's X-Z plane; -Z is the top edge of the artwork. */
         private float[] projectCorners(Pose pose, float halfWidth, float halfHeight, float lift) {
-            float[][] localCorners = {
-                    {-halfWidth, lift, -halfHeight},
-                    {halfWidth, lift, -halfHeight},
-                    {halfWidth, lift, halfHeight},
-                    {-halfWidth, lift, halfHeight},
-            };
+            return projectQuad(pose, lift, new float[][] {
+                    {-halfWidth, 0, -halfHeight},
+                    {halfWidth, 0, -halfHeight},
+                    {halfWidth, 0, halfHeight},
+                    {-halfWidth, 0, halfHeight},
+            });
+        }
+
+        /** A flyer's shadow quad: table level, pushed out by the faked sun angle, shrunken. */
+        private float[] projectShadowCorners(Pose pose, float halfWidth, float halfHeight) {
+            float w = halfWidth * SHADOW_SCALE;
+            float h = halfHeight * SHADOW_SCALE;
+            return projectQuad(pose, 0f, new float[][] {
+                    {-w + SHADOW_OFFSET_M, 0, -h + SHADOW_OFFSET_M},
+                    {w + SHADOW_OFFSET_M, 0, -h + SHADOW_OFFSET_M},
+                    {w + SHADOW_OFFSET_M, 0, h + SHADOW_OFFSET_M},
+                    {-w + SHADOW_OFFSET_M, 0, h + SHADOW_OFFSET_M},
+            });
+        }
+
+        /** Projects pose-local corners raised {@code worldLift} metres along gravity-up. */
+        private float[] projectQuad(Pose pose, float worldLift, float[][] localCorners) {
             float[] corners = new float[8];
             for (int i = 0; i < 4; i++) {
-                float[] screen = projectToScreen(pose.transformPoint(localCorners[i]));
+                float[] world = pose.transformPoint(localCorners[i]);
+                world[1] += worldLift;
+                float[] screen = projectToScreen(world);
                 if (screen == null) {
                     return null;
                 }
