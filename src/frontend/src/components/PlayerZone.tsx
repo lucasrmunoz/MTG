@@ -215,7 +215,8 @@ export function PlayerZone({
                         key={reminder.id}
                         type="button"
                         onClick={() => onDismissReminder(reminder.id)}
-                        title="Tap when done"
+                        title={reminderLabel(reminder)}
+                        aria-label={`${reminderLabel(reminder)} — tap when done`}
                         className="pointer-events-auto max-w-full truncate rounded-full bg-gradient-to-b from-orange-hover to-orange px-2 py-0.5 text-xs font-semibold text-background-deep shadow-[0_2px_8px_-2px_rgba(230,126,34,0.7)] cursor-pointer"
                       >
                         {reminderLabel(reminder)}
@@ -223,7 +224,8 @@ export function PlayerZone({
                     ) : (
                       <span
                         key={reminder.id}
-                        className="max-w-full truncate rounded-full border border-purple/40 bg-background-deep/70 backdrop-blur-sm px-2 py-0.5 text-xs text-foreground/70"
+                        title={reminderLabel(reminder)}
+                        className="pointer-events-auto max-w-full truncate rounded-full border border-purple/40 bg-background-deep/70 backdrop-blur-sm px-2 py-0.5 text-xs text-foreground/70"
                       >
                         {reminderLabel(reminder)}
                       </span>
