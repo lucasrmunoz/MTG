@@ -89,5 +89,12 @@
     "severity": "lfr",
     "dismissedAt": "2026-08-18T21:22:10.210Z",
     "dismissedAtContentSha": "b4cf98ef12ca362e192d2382c3fce1478372836da871719a90f940be18096486"
+  },
+  {
+    "fingerprint": "6a860d37e0c7aea663c75c1c448d0b1ab1de810a",
+    "kind": "bug",
+    "severity": "lfr",
+    "dismissedAt": "2026-08-18T21:39:22.250Z",
+    "dismissedAtContentSha": "fda4e1332f73b530f0e18309a45c67001007d1af997ff70ff323001bca265a21"
   }
 ]
