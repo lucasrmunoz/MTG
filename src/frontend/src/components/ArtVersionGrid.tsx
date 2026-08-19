@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import { useState } from "react";
 import { PriceControls } from "@/components/PriceControls";
 import { formatPrice, priceFor, type Finish } from "@/lib/pricing";
 import type { ArtVersion, VendorInfo } from "@/lib/types";
@@ -37,6 +38,7 @@ export function ArtVersionGrid({
   onFinishChange,
 }: ArtVersionGridProps) {
   const filtered = versions.length !== totalCount;
+  const [collapsed, setCollapsed] = useState(false);
 
   return (
     <div className="mt-6 pt-6 border-t border-purple/20">
@@ -44,17 +46,29 @@ export function ArtVersionGrid({
         <h3 className="section-title">
           Art Versions ({filtered ? `${versions.length} of ${totalCount}` : versions.length})
         </h3>
-        <PriceControls
-          vendors={vendors}
-          vendorId={vendorId}
-          finish={finish}
-          onVendorChange={onVendorChange}
-          onFinishChange={onFinishChange}
-          size="compact"
-        />
+        <div className="flex flex-wrap items-center gap-3">
+          {!collapsed && (
+            <PriceControls
+              vendors={vendors}
+              vendorId={vendorId}
+              finish={finish}
+              onVendorChange={onVendorChange}
+              onFinishChange={onFinishChange}
+              size="compact"
+            />
+          )}
+          <button
+            type="button"
+            onClick={() => setCollapsed((current) => !current)}
+            aria-expanded={!collapsed}
+            className="btn btn-ghost"
+          >
+            {collapsed ? "Show" : "Hide"}
+          </button>
+        </div>
       </div>
 
-      {loading ? (
+      {collapsed ? null : loading ? (
         <div className="flex items-center gap-2 text-foreground/60">
           <span className="spinner text-foreground/40" />
           Loading art versions...
