@@ -54,6 +54,15 @@ public sealed class CardKingdomFeed(HttpClient httpClient, ILogger<CardKingdomFe
                 : new VendorPrice { Nonfoil = nearMint, Foil = existing?.Foil };
         }
 
+        if (prices.Count == 0)
+        {
+            // Card Kingdom sometimes serves an error envelope (or a missing "data" array) with a
+            // 200 status. Returning that as an empty success would replace the previous ~149,000-row
+            // snapshot with nothing, so it is a failed refresh, not an empty catalogue.
+            throw new PriceFeedException(
+                $"The {DisplayName} price feed returned no usable prices.");
+        }
+
         logger.LogInformation(
             "Loaded {Count} Card Kingdom prices; skipped {Skipped} rows without a usable Scryfall id.",
             prices.Count,
