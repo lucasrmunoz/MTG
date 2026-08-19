@@ -80,9 +80,16 @@ const MAX_REFERENCE_IMAGES = 12;
 export const cardAr = isMobileApp
   ? {
       open(options: OpenCardArOptions): Promise<void> {
+        // The viewed printing is the copy most likely on the table, so it must survive the cap
+        // even when it sorts beyond the first MAX_REFERENCE_IMAGES by release date.
+        const viewed = options.printings.find((printing) => printing.id === options.cardId);
+        const printings =
+          viewed === undefined
+            ? options.printings
+            : [viewed, ...options.printings.filter((printing) => printing.id !== viewed.id)];
         return plugin.open({
           ...options,
-          printings: options.printings.slice(0, MAX_REFERENCE_IMAGES),
+          printings: printings.slice(0, MAX_REFERENCE_IMAGES),
         });
       },
       /**
