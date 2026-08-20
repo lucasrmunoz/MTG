@@ -31,6 +31,9 @@
     <string name="ar_status_game_no_commanders">Tap a life token to adjust a player — scan any card to make it a commander</string>
     <string name="ar_status_game_tracking">%1$s — %2$s</string>
     <string name="ar_cards_toggle">Cards (%1$d)</string>
+    <string name="ar_board_filter_all">All</string>
+    <string name="ar_board_table">Table (no player)</string>
+    <string name="ar_board_assign">Assign %1$s to</string>
     <string name="ar_card_tracking">Tracking</string>
     <string name="ar_card_tap_to_place">Tap to place</string>
     <string name="ar_row_replace">Re-place</string>

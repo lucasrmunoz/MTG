@@ -22,6 +22,44 @@ export interface CommanderCard {
   artCropUrl: string | null;
 }
 
+/**
+ * One scanned card on a player's side of the table, as the AR screen reported it. The AR screen
+ * is the sole writer: cards join by being scanned while that player is selected, and counters
+ * ride along from the on-device counter store.
+ */
+export interface BoardCard {
+  /** Scryfall printing id of the recognised copy; unique within one player's board. */
+  id: string;
+  name: string;
+  /** Full-card scan for the board view; null when the printing has no image. */
+  imageUrl: string | null;
+  /** Scryfall type line; decides which board row the card sits in. */
+  typeLine: string;
+  /** Whether the card currently flies — printed or countered on, minus a manual disable. */
+  flying: boolean;
+  /** Net stat-counter deltas, e.g. 2/2 from two +1/+1 counters. */
+  power: number;
+  toughness: number;
+  /** Keyword counters sitting on the card. */
+  keywords: string[];
+  /** For a card standing in for a pile of tokens, how many it represents; 0 = a real card. */
+  tokenCount: number;
+}
+
+/** Which row of the top-down board a card belongs to, by its type line. */
+export type BoardRow = "creatures" | "lands" | "other";
+
+export function boardRow(card: BoardCard): BoardRow {
+  const type = card.typeLine.toLowerCase();
+  if (type.includes("creature")) {
+    return "creatures"; // Before lands: a Dryad Arbor fights, so it stands with the creatures.
+  }
+  if (type.includes("land")) {
+    return "lands";
+  }
+  return "other";
+}
+
 export interface Player {
   /** Stable seat number, 1-based; survives renames and commander changes. */
   id: number;
@@ -32,6 +70,8 @@ export interface Player {
   commanderCasts: number;
   /** Knocked out of the game: keeps their seat on the board, but the turn order skips them. */
   eliminated: boolean;
+  /** The cards the AR screen has scanned to this player's side. */
+  board: BoardCard[];
 }
 
 /**
@@ -91,6 +131,7 @@ export function createGame(
       commander: null,
       commanderCasts: 0,
       eliminated: false,
+      board: [],
     })),
     activePlayerId: 1,
     turn: 1,
@@ -342,10 +383,10 @@ function clampPlayerCount(count: number): number {
  * Storage envelope. Versioned so a future shape change can migrate or discard old saves instead
  * of crashing on them.
  */
-const STORAGE_VERSION = 2;
+const STORAGE_VERSION = 3;
 
-/** Version 1 predates turn tracking; its saves load with the turn fields defaulted. */
-const LEGACY_STORAGE_VERSION = 1;
+/** Versions 1 (pre turn tracking) and 2 (pre boards) load with the missing fields defaulted. */
+const LEGACY_STORAGE_VERSIONS = [1, 2];
 
 export function serializeGame(game: GameState): string {
   return JSON.stringify({ version: STORAGE_VERSION, game });
@@ -361,7 +402,8 @@ export function parseGame(raw: string): GameState | null {
   }
   if (
     !isRecord(envelope) ||
-    (envelope.version !== STORAGE_VERSION && envelope.version !== LEGACY_STORAGE_VERSION) ||
+    (envelope.version !== STORAGE_VERSION &&
+      !LEGACY_STORAGE_VERSIONS.includes(envelope.version as number)) ||
     !isRecord(envelope.game)
   ) {
     return null;
@@ -456,11 +498,54 @@ function parseReminder(entry: unknown): Reminder | null {
   return { id, playerId, phase: phase as ReminderPhase, text, due };
 }
 
+/** Null for a malformed entry — one bad card drops that card, never the whole save. */
+export function parseBoardCard(entry: unknown): BoardCard | null {
+  if (!isRecord(entry)) {
+    return null;
+  }
+  const { id, name, imageUrl, typeLine, flying, power, toughness, keywords, tokenCount } = entry;
+  if (
+    typeof id !== "string" ||
+    id === "" ||
+    typeof name !== "string" ||
+    !isNullableString(imageUrl)
+  ) {
+    return null;
+  }
+  return {
+    id,
+    name,
+    imageUrl: imageUrl ?? null,
+    typeLine: typeof typeLine === "string" ? typeLine : "",
+    flying: flying === true,
+    power: typeof power === "number" ? Math.trunc(power) : 0,
+    toughness: typeof toughness === "number" ? Math.trunc(toughness) : 0,
+    keywords: Array.isArray(keywords)
+      ? keywords.filter((keyword): keyword is string => typeof keyword === "string")
+      : [],
+    tokenCount: typeof tokenCount === "number" ? Math.max(0, Math.trunc(tokenCount)) : 0,
+  };
+}
+
+function parseBoard(value: unknown): BoardCard[] {
+  if (!Array.isArray(value)) {
+    return []; // Absent in saves and payloads that predate boards.
+  }
+  const cards: BoardCard[] = [];
+  for (const entry of value) {
+    const card = parseBoardCard(entry);
+    if (card !== null) {
+      cards.push(card);
+    }
+  }
+  return cards;
+}
+
 function parsePlayer(entry: unknown): Player | null {
   if (!isRecord(entry)) {
     return null;
   }
-  const { id, name, life, commander, commanderCasts, eliminated } = entry;
+  const { id, name, life, commander, commanderCasts, eliminated, board } = entry;
   if (
     typeof id !== "number" ||
     typeof name !== "string" ||
@@ -498,6 +583,7 @@ function parsePlayer(entry: unknown): Player | null {
     commanderCasts: Math.max(0, commanderCasts),
     // Absent in saves that predate elimination; those players are all still in the game.
     eliminated: eliminated === true,
+    board: parseBoard(board),
   };
 }
 
@@ -539,13 +625,16 @@ export function toArPlayers(game: GameState): ArGamePlayer[] {
               artCropUrl: player.commander.artCropUrl,
             }
           : null,
+      // A reopened AR screen re-adopts these, so a board built over several AR visits persists.
+      board: player.board,
     }));
 }
 
 /**
- * Merges what the AR session changed — life and casts only, matched by player id. Names,
- * commanders and layout always keep the web-side values, and ids the game does not know are
- * ignored, so a stale or malformed AR result can never corrupt the game.
+ * Merges what the AR session changed — life, casts and the scanned board, matched by player id.
+ * Names, commanders and layout always keep the web-side values, board entries are re-validated
+ * card by card, and ids the game does not know are ignored, so a stale or malformed AR result
+ * can never corrupt the game.
  */
 export function applyArPlayers(game: GameState, players: readonly ArGamePlayer[]): GameState {
   const returned = new Map(players.map((player) => [player.id, player]));
@@ -562,6 +651,7 @@ export function applyArPlayers(game: GameState, players: readonly ArGamePlayer[]
         commanderCasts: Number.isFinite(update.commanderCasts)
           ? Math.max(0, Math.trunc(update.commanderCasts))
           : player.commanderCasts,
+        board: parseBoard(update.board),
       };
     }),
   };

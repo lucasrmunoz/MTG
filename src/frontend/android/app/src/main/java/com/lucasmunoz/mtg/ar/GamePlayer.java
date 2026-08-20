@@ -14,6 +14,30 @@ import org.json.JSONObject;
  */
 public final class GamePlayer {
 
+    /**
+     * One card from this player's board as the web game last knew it, re-adopted for tracking
+     * when the screen opens. Counters are not seeded — they live in the on-device counter store
+     * keyed by printing, so the screen re-reads them itself.
+     */
+    public static final class BoardSeed {
+        public final String printingId;
+        public final String name;
+        public final String imageUrl;
+        public final String typeLine;
+        public final boolean flying;
+        public final int tokenCount;
+
+        BoardSeed(String printingId, String name, String imageUrl, String typeLine,
+                boolean flying, int tokenCount) {
+            this.printingId = printingId;
+            this.name = name;
+            this.imageUrl = imageUrl;
+            this.typeLine = typeLine;
+            this.flying = flying;
+            this.tokenCount = tokenCount;
+        }
+    }
+
     public final int id;
     public final String name;
     /** Unclamped: cards like Angel's Grace make negative totals a real game state. */
@@ -30,6 +54,12 @@ public final class GamePlayer {
     public final String cardImageUrl;
     /** Art-only crop for the life token; null when Scryfall has none (the scan stands in). */
     public final String cardArtCropUrl;
+
+    /**
+     * The player's board as sent in. Input-only: the activity rebuilds boards from what it
+     * actually tracked when it publishes the result, so {@link #toJson} never echoes these.
+     */
+    public final List<BoardSeed> boardSeeds = new ArrayList<>();
 
     GamePlayer(int id, String name, int life, int commanderCasts,
             boolean active, List<String> reminders,
@@ -85,15 +115,35 @@ public final class GamePlayer {
         }
 
         JSONObject card = json.isNull("card") ? null : json.optJSONObject("card");
+        GamePlayer player;
         if (card == null) {
-            return new GamePlayer(id, name, life, casts, active, reminders,
+            player = new GamePlayer(id, name, life, casts, active, reminders,
                     null, null, null, null);
+        } else {
+            // artCropUrl is optional and nullable — older payloads simply have no token art.
+            String artCropUrl = card.isNull("artCropUrl") ? null : card.getString("artCropUrl");
+            player = new GamePlayer(id, name, life, casts, active, reminders,
+                    card.getString("id"), card.getString("name"), card.getString("imageUrl"),
+                    artCropUrl);
         }
-        // artCropUrl is optional and nullable — older payloads simply have no token art.
-        String artCropUrl = card.isNull("artCropUrl") ? null : card.getString("artCropUrl");
-        return new GamePlayer(id, name, life, casts, active, reminders,
-                card.getString("id"), card.getString("name"), card.getString("imageUrl"),
-                artCropUrl);
+
+        JSONArray board = json.optJSONArray("board");
+        if (board != null) {
+            for (int i = 0; i < board.length(); i++) {
+                JSONObject entry = board.getJSONObject(i);
+                if (entry.isNull("imageUrl")) {
+                    continue; // Without a scan there is nothing to register or show.
+                }
+                player.boardSeeds.add(new BoardSeed(
+                        entry.getString("id"),
+                        entry.getString("name"),
+                        entry.getString("imageUrl"),
+                        entry.optString("typeLine", ""),
+                        entry.optBoolean("flying", false),
+                        Math.max(0, entry.optInt("tokenCount", 0))));
+            }
+        }
+        return player;
     }
 
     public JSONObject toJson() throws JSONException {

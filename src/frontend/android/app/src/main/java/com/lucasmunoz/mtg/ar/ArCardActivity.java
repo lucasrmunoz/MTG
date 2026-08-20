@@ -21,6 +21,7 @@ import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.NumberPicker;
@@ -148,6 +149,9 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         /** For a card standing in for a pile of tokens: how many it represents. 0 = a real
          *  card. Session-local by design — a zombie horde is game state, not card state. */
         volatile int tokenCount;
+        /** Game mode: the seat this scan belongs to — the player selected when it confirmed,
+         *  reassignable from the card list. 0 = the table, no player. */
+        volatile int ownerId;
         volatile boolean located;
         volatile float halfWidthM = CARD_WIDTH_M / 2f;
         volatile float halfHeightM = CARD_HEIGHT_M / 2f;
@@ -225,6 +229,9 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     private final Map<String, GamePlayer> playersByCardKey = new ConcurrentHashMap<>();
     /** The focused player in game mode, settable by card focus or a life-token tap. */
     private volatile int focusedPlayerId = -1;
+
+    /** Board filter for the AR view and card list: -1 shows everyone, else one seat's cards. */
+    private volatile int boardFilterPlayerId = -1;
 
     /** A life token next to 63mm cards; its world anchors live and die with the session. */
     private static final float TOKEN_WIDTH_M = 0.06f;
@@ -418,6 +425,7 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             }
         }
 
+
         // The scanner always runs, in game mode too: any table card can join the scene with
         // its own counters. Commander names are filtered out of its candidates — those are
         // already tracked under per-player keys. The name catalog is what lets it match
@@ -469,6 +477,24 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             overlay.upsertToken(player.id, player.name, null, player.life, player.commanderTax());
             if (player.hasCard()) {
                 adoptGameCard(player);
+            }
+        }
+        for (GamePlayer player : game.players()) {
+            // Boards built in earlier AR visits come back: their cards re-adopt for tracking,
+            // owned by the same seats. Counters need no seeding — the store still holds them.
+            for (GamePlayer.BoardSeed seed : player.boardSeeds) {
+                if (findCardByName(seed.name) != null) {
+                    continue; // Already seeded from another seat; the first owner keeps it.
+                }
+                ActiveCard card = new ActiveCard(seed.printingId, seed.name, seed.imageUrl);
+                card.ownerId = player.id;
+                card.typeLine = seed.typeLine;
+                card.tokenCount = seed.tokenCount;
+                if (seed.flying) {
+                    // The printed keyword list did not survive the round trip; the flag did.
+                    card.keywords.add("Flying");
+                }
+                adoptCard(card, true);
             }
         }
         updateStatusLine();
@@ -746,6 +772,17 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
         return playersByCardKey.containsKey(key);
     }
 
+    /** Which seat a card belongs to: a commander's player, or the seat its scan was assigned. */
+    private int ownerIdOf(ActiveCard card) {
+        GamePlayer owner = playersByCardKey.get(card.key);
+        return owner != null ? owner.id : card.ownerId;
+    }
+
+    /** GL thread safe — both sides of the check are volatile or concurrent. */
+    private boolean passesBoardFilter(ActiveCard card) {
+        return boardFilterPlayerId == -1 || ownerIdOf(card) == boardFilterPlayerId;
+    }
+
     /** Game mode shares the image budget across up to six commanders plus scanned cards. */
     private int maxReferenceImagesPerCard() {
         return game != null ? GAME_MAX_REFERENCE_IMAGES_PER_CARD : MAX_REFERENCE_IMAGES_PER_CARD;
@@ -755,6 +792,11 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
     private void adoptCard(ActiveCard card, boolean fetchArtVersions) {
         if (cardsByKey.putIfAbsent(card.key, card) != null) {
             return;
+        }
+        // A fresh scan lands on the selected player's side of the table — that is how boards
+        // are built: select the seat, scan its cards. Seeded cards arrive with an owner.
+        if (game != null && card.ownerId == 0 && focusedPlayerId > 0) {
+            card.ownerId = focusedPlayerId;
         }
         cardOrder.add(card);
         for (String printingId : card.printingUrls.keySet()) {
@@ -1217,6 +1259,11 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
      */
     private void refreshCardList() {
         runOnUiThread(() -> {
+            if (game != null) {
+                // Every path that changes the table's cards funnels through here, so this is
+                // where the result's boards stay fresh: adopt, remove, reassign, token counts.
+                publishGameResult();
+            }
             cardsToggle.setVisibility(cardOrder.isEmpty() ? View.GONE : View.VISIBLE);
             cardsToggle.setText(getString(R.string.ar_cards_toggle, cardOrder.size()));
             boolean open = cardListOpen && !cardOrder.isEmpty();
@@ -1226,7 +1273,13 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             }
 
             cardList.removeAllViews();
+            if (game != null) {
+                cardList.addView(buildBoardFilterRow());
+            }
             for (ActiveCard card : cardOrder) {
+                if (game != null && !passesBoardFilter(card)) {
+                    continue;
+                }
                 View row = getLayoutInflater().inflate(R.layout.ar_card_row, cardList, false);
 
                 ImageView thumb = row.findViewById(R.id.ar_row_thumb);
@@ -1234,6 +1287,9 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
 
                 TextView title = row.findViewById(R.id.ar_row_title);
                 GamePlayer owner = playersByCardKey.get(card.key);
+                if (owner == null && game != null && card.ownerId > 0) {
+                    owner = game.playerById(card.ownerId);
+                }
                 String name = card.tokenCount > 0
                         ? card.name + " ×" + card.tokenCount : card.name;
                 title.setText(owner == null ? name : owner.name + " · " + name);
@@ -1256,13 +1312,66 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
                 replace.setOnClickListener(v -> rePlaceCard(card));
 
                 Button remove = row.findViewById(R.id.ar_row_remove);
-                remove.setVisibility(owner == null ? View.VISIBLE : View.GONE);
+                // Commanders belong to their players; every scanned card stays removable, owned
+                // by a seat or not.
+                remove.setVisibility(isGameCard(card.key) ? View.GONE : View.VISIBLE);
                 remove.setOnClickListener(v -> removeCard(card));
 
                 row.setOnClickListener(v -> onCardRowTapped(card));
+                if (game != null && !isGameCard(card.key)) {
+                    row.setOnLongClickListener(v -> {
+                        showAssignDialog(card);
+                        return true;
+                    });
+                }
                 cardList.addView(row);
             }
         });
+    }
+
+    /** Chip row atop the card list: All plus one per seat, filtering the list and AR alike. */
+    private View buildBoardFilterRow() {
+        LinearLayout chips = new LinearLayout(this);
+        chips.setOrientation(LinearLayout.HORIZONTAL);
+        int pad = (int) (4 * getResources().getDisplayMetrics().density);
+        chips.setPadding(pad, pad, pad, pad);
+        addFilterChip(chips, getString(R.string.ar_board_filter_all), -1);
+        for (GamePlayer player : game.players()) {
+            addFilterChip(chips, player.name, player.id);
+        }
+        HorizontalScrollView scroll = new HorizontalScrollView(this);
+        scroll.setHorizontalScrollBarEnabled(false);
+        scroll.addView(chips);
+        return scroll;
+    }
+
+    private void addFilterChip(LinearLayout chips, String label, int playerId) {
+        Button chip = new Button(this);
+        chip.setAllCaps(false);
+        chip.setText(label);
+        chip.setEnabled(boardFilterPlayerId != playerId); // The active filter shows disabled.
+        chip.setOnClickListener(v -> {
+            boardFilterPlayerId = playerId;
+            refreshCardList();
+        });
+        chips.addView(chip);
+    }
+
+    /** Long-press reassignment: whose side of the table does this scan belong to? */
+    private void showAssignDialog(ActiveCard card) {
+        List<GamePlayer> players = game.players();
+        String[] choices = new String[players.size() + 1];
+        choices[0] = getString(R.string.ar_board_table);
+        for (int i = 0; i < players.size(); i++) {
+            choices[i + 1] = players.get(i).name;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(getString(R.string.ar_board_assign, card.name))
+                .setItems(choices, (dialog, which) -> {
+                    card.ownerId = which == 0 ? 0 : players.get(which - 1).id;
+                    refreshCardList();
+                })
+                .show();
     }
 
     /** Type line and set when Scryfall told us; the keyword list as a fallback; else empty. */
@@ -1507,12 +1616,45 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
      */
     private void publishGameResult() {
         try {
+            JSONArray players = new JSONArray(game.toJsonString());
+            for (int i = 0; i < players.length(); i++) {
+                JSONObject player = players.getJSONObject(i);
+                player.put("board", boardJson(player.getInt("id")));
+            }
             Intent data = new Intent();
-            data.putExtra(EXTRA_GAME_RESULT, game.toJsonString());
+            data.putExtra(EXTRA_GAME_RESULT, players.toString());
             setResult(RESULT_OK, data);
         } catch (JSONException e) {
             Log.w(TAG, "Could not serialise the game result.", e);
         }
+    }
+
+    /**
+     * One seat's board: every scanned (non-commander) card assigned to it, with its live
+     * counters read from the store. UI thread only, like everything touching the store.
+     */
+    private JSONArray boardJson(int playerId) throws JSONException {
+        JSONArray board = new JSONArray();
+        for (ActiveCard card : cardOrder) {
+            if (isGameCard(card.key) || card.ownerId != playerId) {
+                continue;
+            }
+            CardCounters counters = store.get(card.printingId);
+            JSONObject entry = new JSONObject();
+            entry.put("id", card.printingId);
+            entry.put("name", card.name);
+            String imageUrl = card.printingUrls.get(card.printingId);
+            entry.put("imageUrl", imageUrl == null ? JSONObject.NULL : imageUrl);
+            entry.put("typeLine", card.typeLine);
+            // Already folds the manual ground toggle in, mirroring what the AR view renders.
+            entry.put("flying", card.flying);
+            entry.put("power", counters.netPower());
+            entry.put("toughness", counters.netToughness());
+            entry.put("keywords", new JSONArray(counters.keywords));
+            entry.put("tokenCount", card.tokenCount);
+            board.put(entry);
+        }
+        return board;
     }
 
     private void showCustomStatDialog() {
@@ -1652,6 +1794,9 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             updateAbilityFlags(focused);
         }
         refreshCounterUi();
+        if (game != null) {
+            publishGameResult(); // Counters ride the boards, so every edit refreshes the result.
+        }
     }
 
     /**
@@ -2326,6 +2471,9 @@ public final class ArCardActivity extends Activity implements CardOverlayView.Li
             Matrix.multiplyMM(viewProjection, 0, projectionMatrix, 0, viewMatrix, 0);
 
             for (ActiveCard card : cardOrder) {
+                if (!passesBoardFilter(card)) {
+                    continue; // Filtered to one seat: other seats' cards vanish from the view.
+                }
                 appendPoses(card, poses);
             }
             return poses;

@@ -20,7 +20,10 @@ internal sealed class SessionConnection(WebSocket socket)
     /// Sends one text frame. False when the socket is closed or the send fails — a dead peer is
     /// an expected outcome the caller prunes, never an exception that tears down another loop.
     /// </summary>
-    public async Task<bool> TrySendTextAsync(string message)
+    public Task<bool> TrySendTextAsync(string message) =>
+        TrySendAsync(Encoding.UTF8.GetBytes(message), WebSocketMessageType.Text);
+
+    private async Task<bool> TrySendAsync(byte[] payload, WebSocketMessageType messageType)
     {
         using var timeout = new CancellationTokenSource(SendTimeout);
         try
@@ -38,8 +41,7 @@ internal sealed class SessionConnection(WebSocket socket)
             {
                 return false;
             }
-            var bytes = Encoding.UTF8.GetBytes(message);
-            await Socket.SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true, timeout.Token);
+            await Socket.SendAsync(payload, messageType, endOfMessage: true, timeout.Token);
             return true;
         }
         catch (Exception ex) when (

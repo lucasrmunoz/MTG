@@ -9,6 +9,7 @@
  */
 
 import { registerPlugin } from "@capacitor/core";
+import type { BoardCard } from "@/lib/game";
 
 /** One printing the camera should recognise: Scryfall id plus its full-card image. */
 export interface ArPrinting {
@@ -55,6 +56,12 @@ export interface ArGamePlayer {
   reminders: string[];
   /** Null when the player has no commander or the printing has no scan; shown but untracked. */
   card: ArGameCard | null;
+  /**
+   * The cards scanned to this player's side of the table. Sent in so a reopened AR screen
+   * re-adopts them; sent back rebuilt from what the screen actually tracked, and validated by
+   * the web side before it merges — the bridge is a network boundary like any other.
+   */
+  board: BoardCard[];
 }
 
 export interface ArGameResult {

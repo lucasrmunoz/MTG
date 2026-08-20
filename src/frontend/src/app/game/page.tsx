@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { BoardView } from "@/components/BoardView";
 import { CommanderPicker } from "@/components/CommanderPicker";
 import { GameBoard } from "@/components/GameBoard";
 import { GameSetup } from "@/components/GameSetup";
@@ -58,6 +59,8 @@ function AppGamePage() {
   const [confirmingReset, setConfirmingReset] = useState(false);
   const [arBusy, setArBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // "life" is the tracker everyone taps; "board" is the read-only scanned-table view.
+  const [view, setView] = useState<GameView>("life");
 
   useEffect(() => {
     const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -198,7 +201,13 @@ function AppGamePage() {
         <Link href="/" aria-label="Back to card lookup" className="btn btn-ghost btn-sm px-2.5">
           ←
         </Link>
-        <LayoutToggle layout={game.layout} onChange={(next) => setGame(setLayout(game, next))} />
+        <ViewToggle view={view} onChange={setView} />
+        {view === "life" && (
+          <LayoutToggle
+            layout={game.layout}
+            onChange={(next) => setGame(setLayout(game, next))}
+          />
+        )}
         <span className="whitespace-nowrap font-display text-sm font-bold tracking-wider text-purple-light">
           Turn {game.turn}
         </span>
@@ -230,18 +239,22 @@ function AppGamePage() {
       )}
 
       <div className="min-h-0 flex-1">
-        <GameBoard
-          game={game}
-          onAdjustLife={handleAdjustLife}
-          onAdjustCasts={handleAdjustCasts}
-          onRename={handleRename}
-          onPickCommander={setPickerFor}
-          onEndTurn={handleEndTurn}
-          onSetActive={handleSetActive}
-          onSetEliminated={handleSetEliminated}
-          onAddReminder={handleAddReminder}
-          onDismissReminder={handleDismissReminder}
-        />
+        {view === "board" ? (
+          <BoardView game={game} />
+        ) : (
+          <GameBoard
+            game={game}
+            onAdjustLife={handleAdjustLife}
+            onAdjustCasts={handleAdjustCasts}
+            onRename={handleRename}
+            onPickCommander={setPickerFor}
+            onEndTurn={handleEndTurn}
+            onSetActive={handleSetActive}
+            onSetEliminated={handleSetEliminated}
+            onAddReminder={handleAddReminder}
+            onDismissReminder={handleDismissReminder}
+          />
+        )}
       </div>
 
       {pickerPlayer !== null && (
@@ -281,6 +294,7 @@ function WebGamePage() {
   // The host's layout is their table's arrangement; this device is in someone's hand, so the
   // guest keeps a local override instead of following it.
   const [layoutOverride, setLayoutOverride] = useState<GameLayout | null>(null);
+  const [view, setView] = useState<GameView>("life");
 
   const sessionRef = useRef<GuestSession | null>(null);
   // Re-entry guard the callback can trust: the `joining` state is stale inside its closure, and
@@ -419,7 +433,8 @@ function WebGamePage() {
   return (
     <div className="flex h-dvh flex-col gap-2 overflow-hidden p-2">
       <div className="flex shrink-0 flex-wrap items-center gap-2">
-        <LayoutToggle layout={layout} onChange={setLayoutOverride} />
+        <ViewToggle view={view} onChange={setView} />
+        {view === "life" && <LayoutToggle layout={layout} onChange={setLayoutOverride} />}
         <span className="whitespace-nowrap font-display text-sm font-bold tracking-wider text-purple-light">
           Turn {game.turn}
         </span>
@@ -453,18 +468,22 @@ function WebGamePage() {
       )}
 
       <div className="min-h-0 flex-1">
-        <GameBoard
-          game={{ ...game, layout }}
-          onAdjustLife={handleAdjustLife}
-          onAdjustCasts={handleAdjustCasts}
-          onRename={handleRename}
-          onPickCommander={setPickerFor}
-          onEndTurn={handleEndTurn}
-          onSetActive={handleSetActive}
-          onSetEliminated={handleSetEliminated}
-          onAddReminder={handleAddReminder}
-          onDismissReminder={handleDismissReminder}
-        />
+        {view === "board" ? (
+          <BoardView game={game} />
+        ) : (
+          <GameBoard
+            game={{ ...game, layout }}
+            onAdjustLife={handleAdjustLife}
+            onAdjustCasts={handleAdjustCasts}
+            onRename={handleRename}
+            onPickCommander={setPickerFor}
+            onEndTurn={handleEndTurn}
+            onSetActive={handleSetActive}
+            onSetEliminated={handleSetEliminated}
+            onAddReminder={handleAddReminder}
+            onDismissReminder={handleDismissReminder}
+          />
+        )}
       </div>
 
       {pickerPlayer !== null && (
@@ -477,6 +496,42 @@ function WebGamePage() {
           onClose={() => setPickerFor(null)}
         />
       )}
+    </div>
+  );
+}
+
+/** What the main area shows: the tappable life tracker, or the scanned top-down board. */
+type GameView = "life" | "board";
+
+function ViewToggle({
+  view,
+  onChange,
+}: {
+  view: GameView;
+  onChange: (view: GameView) => void;
+}) {
+  return (
+    <div className="flex overflow-hidden rounded-[0.625rem] border border-purple/40 bg-background-deep/60">
+      {(
+        [
+          ["life", "Life"],
+          ["board", "Board"],
+        ] as const
+      ).map(([value, label]) => (
+        <button
+          key={value}
+          type="button"
+          onClick={() => onChange(value)}
+          aria-pressed={view === value}
+          className={`px-2.5 py-1 text-sm font-semibold transition-colors duration-150 cursor-pointer ${
+            view === value
+              ? "bg-gradient-to-b from-orange-hover to-orange text-background-deep"
+              : "text-foreground hover:text-orange"
+          }`}
+        >
+          {label}
+        </button>
+      ))}
     </div>
   );
 }
