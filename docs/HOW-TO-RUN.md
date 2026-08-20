@@ -144,6 +144,48 @@ $env:JAVA_HOME="$env:LOCALAPPDATA\Android\jdk21"
 .\gradlew :app:testDebugUnitTest
 ```
 
+## Trying shared game sessions on the LAN
+
+The commander game can be shared live: the app hosts, other phones join by QR code or by typing
+the 6-character code at `/game` on the web build. The relay is part of Mtg.Api
+(`/api/sessions/ws`), so nothing extra runs — but phones need URLs that resolve on the wifi, not
+`localhost`.
+
+```powershell
+# Terminal 1 — API listening on all interfaces so phones can reach it
+cd d:\SoftwareProjects\MTG
+dotnet run --project src/Mtg.Api --urls http://0.0.0.0:5000
+
+# Terminal 2 — frontend with LAN URLs (replace 192.168.1.20 with this PC's IP, ipconfig shows it)
+cd d:\SoftwareProjects\MTG\src\frontend
+$env:NEXT_PUBLIC_SESSION_WS_URL="ws://192.168.1.20:5000/api/sessions/ws"
+$env:NEXT_PUBLIC_WEB_APP_URL="http://192.168.1.20:3000"
+$env:NEXT_PUBLIC_API_BASE_URL=""   # guests talk to Scryfall directly; avoids a CORS entry
+npm run dev
+```
+
+Guests on the wifi then open `http://192.168.1.20:3000/game` (or scan the host's QR code, which
+carries that link). Sharing affordances hide entirely when `NEXT_PUBLIC_SESSION_WS_URL` is unset.
+
+Hosting ships only in the app build, so the browser's `/game` is always the guest door. To try the
+host flow in a browser anyway, run a second dev server with `NEXT_PUBLIC_MOBILE_APP=true` (e.g. on
+`--port 3001`): the game tracker and sharing work; card search in that tab does not, because app
+mode expects the on-device data plugins.
+
+For the APK to host sessions, set the same two variables when building it:
+
+```powershell
+cd d:\SoftwareProjects\MTG\src\frontend
+$env:NEXT_PUBLIC_SESSION_WS_URL="ws://192.168.1.20:5000/api/sessions/ws"
+$env:NEXT_PUBLIC_WEB_APP_URL="http://192.168.1.20:3000"
+$env:JAVA_HOME="$env:LOCALAPPDATA\Android\jdk21"
+npm run app:apk
+```
+
+The values are baked in at build time (static export), so a later hosted deployment means
+rebuilding with the real URLs. Windows Firewall may prompt to allow `dotnet` and `node` on private
+networks the first time — allow both, or the phones cannot connect.
+
 ## Building the hosted (static) version
 
 The GitHub Pages build has no API behind it and talks to Scryfall directly, so only TCGplayer

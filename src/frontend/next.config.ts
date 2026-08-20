@@ -21,6 +21,9 @@ const forMobileApp = process.env.NEXT_PUBLIC_MOBILE_APP === "true";
 const nextConfig: NextConfig = {
   ...(forGitHubPages ? { output: "export" as const, basePath, assetPrefix: basePath } : {}),
   ...(forMobileApp ? { output: "export" as const } : {}),
+  // Dev-only: phones on the wifi load the dev server via the PC's LAN IP for session testing,
+  // which Next blocks by default. Update the IP if the router hands the PC a different one.
+  allowedDevOrigins: ["192.168.50.49"],
   turbopack: {
     root: projectRoot,
   },

@@ -1,5 +1,6 @@
 using Mtg.Api;
 using Mtg.Api.Endpoints;
+using Mtg.Api.Sessions;
 using Mtg.Core;
 
 const string CorsPolicy = "Frontend";
@@ -11,6 +12,8 @@ var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get
 
 builder.Services.AddScryfall();
 builder.Services.AddPricing();
+builder.Services.AddSingleton<GameSessionRegistry>();
+builder.Services.AddHostedService<SessionCleanupService>();
 builder.Services.AddOpenApi();
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<ScryfallExceptionHandler>();
@@ -33,6 +36,9 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 
+app.UseWebSockets();
+
 app.MapCardEndpoints();
+app.MapSessionEndpoints();
 
 app.Run();

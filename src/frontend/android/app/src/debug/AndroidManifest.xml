@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug-only overlay: LAN session testing connects to a plain ws:// relay on the dev PC, which
+     Android's default cleartext policy blocks. Release builds keep the strict policy — a hosted
+     relay speaks wss:// and needs no cleartext. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application android:usesCleartextTraffic="true" />
+
+</manifest>

@@ -2,10 +2,12 @@
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { CommanderPicker } from "@/components/CommanderPicker";
 import { GameBoard } from "@/components/GameBoard";
 import { GameSetup } from "@/components/GameSetup";
+import { JoinGamePanel } from "@/components/JoinGamePanel";
+import { ShareGameControls } from "@/components/ShareGameControls";
 import { cardAr } from "@/lib/ar";
 import {
   addReminder,
@@ -27,8 +29,13 @@ import {
   type GameState,
   type ReminderPhase,
 } from "@/lib/game";
+import { gameSession, type GuestSession } from "@/lib/session";
+import { applySessionAction, type SessionAction } from "@/lib/sessionActions";
 
-/** The game tracker ships only in the app build; on the web this route is a 404. */
+/**
+ * Hosting a game ships only in the app build. On the web this route is the guest's door into a
+ * session shared from an app — and stays a 404 where no session relay is configured.
+ */
 const isMobileApp = process.env.NEXT_PUBLIC_MOBILE_APP === "true";
 
 /** The one saved game. Versioned inside the payload, not the key. */
@@ -38,10 +45,11 @@ const STORAGE_KEY = "mtg.game.v1";
 const CONFIRM_RESET_MS = 2500;
 
 export default function GamePage() {
-  if (!isMobileApp) {
-    notFound();
-  }
+  return isMobileApp ? <AppGamePage /> : <WebGamePage />;
+}
 
+/** The host experience: the local game this device owns, optionally shared as a session. */
+function AppGamePage() {
   const [game, setGame] = useState<GameState | null>(null);
   // Gates the persistence effect until the saved game has been read back, so the initial null
   // state cannot wipe a save the page simply has not restored yet.
@@ -117,6 +125,11 @@ export default function GamePage() {
   const handleDismissReminder = useCallback((reminderId: number) => {
     setGame((current) => (current === null ? current : dismissReminder(current, reminderId)));
   }, []);
+  // A guest's action lands in the same state updater its own buttons use; the publish effect in
+  // ShareGameControls then carries the result back to every guest.
+  const handleSessionAction = useCallback((action: SessionAction) => {
+    setGame((current) => (current === null ? current : applySessionAction(current, action)));
+  }, []);
 
   function handleNewGame() {
     if (!confirmingReset) {
@@ -190,6 +203,9 @@ export default function GamePage() {
           Turn {game.turn}
         </span>
         <span className="min-w-0 flex-1" />
+        {gameSession !== null && (
+          <ShareGameControls game={game} onAction={handleSessionAction} />
+        )}
         {cardAr !== null && (
           <button
             type="button"
@@ -235,6 +251,227 @@ export default function GamePage() {
             setGame((current) =>
               current === null ? current : setCommander(current, pickerPlayer.id, commander),
             );
+            setPickerFor(null);
+          }}
+          onClose={() => setPickerFor(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * The guest experience: a session joined by code — from a scanned QR link's ?session= or typed
+ * by hand — rendering the host's game and sending every edit back as an action. The host is
+ * authoritative, so the board only moves when its state comes back over the wire.
+ */
+function WebGamePage() {
+  if (gameSession === null) {
+    notFound();
+  }
+
+  const [code, setCode] = useState<string | null>(null);
+  const [joining, setJoining] = useState(false);
+  const [joinError, setJoinError] = useState<string | null>(null);
+  const [game, setGame] = useState<GameState | null>(null);
+  const [hostPresent, setHostPresent] = useState(true);
+  const [ended, setEnded] = useState(false);
+  const [lost, setLost] = useState(false);
+  const [pickerFor, setPickerFor] = useState<number | null>(null);
+  // The host's layout is their table's arrangement; this device is in someone's hand, so the
+  // guest keeps a local override instead of following it.
+  const [layoutOverride, setLayoutOverride] = useState<GameLayout | null>(null);
+
+  const sessionRef = useRef<GuestSession | null>(null);
+  // Re-entry guard the callback can trust: the `joining` state is stale inside its closure, and
+  // a double-tapped Rejoin must not open two sockets.
+  const joiningRef = useRef(false);
+
+  const joinByCode = useCallback(async (rawCode: string) => {
+    if (gameSession === null || joiningRef.current) {
+      return;
+    }
+    const normalized = rawCode.trim().toUpperCase();
+    if (normalized === "") {
+      return;
+    }
+    sessionRef.current?.leave();
+    joiningRef.current = true;
+    setJoining(true);
+    setJoinError(null);
+    setEnded(false);
+    setLost(false);
+    setHostPresent(true);
+    try {
+      const joined = await gameSession.join(normalized, {
+        onState: setGame,
+        onHostPresence: setHostPresent,
+        onEnded: () => {
+          setEnded(true);
+          setGame(null);
+        },
+        onLost: () => setLost(true),
+      });
+      sessionRef.current = joined;
+      setCode(normalized);
+    } catch (err) {
+      setJoinError(err instanceof Error ? err.message : "Could not join the game.");
+    } finally {
+      joiningRef.current = false;
+      setJoining(false);
+    }
+  }, []);
+
+  // A scanned QR code lands here with ?session=CODE; join it without any typing.
+  useEffect(() => {
+    const fromUrl = new URLSearchParams(window.location.search).get("session");
+    if (fromUrl !== null && fromUrl !== "") {
+      /* eslint-disable-next-line react-hooks/set-state-in-effect -- the URL is client-only, so
+         the code can only be read after hydration; joining right here is that pattern. */
+      void joinByCode(fromUrl);
+    }
+  }, [joinByCode]);
+
+  useEffect(
+    () => () => {
+      sessionRef.current?.leave();
+    },
+    [],
+  );
+
+  useWakeLock(game !== null);
+
+  const send = useCallback((action: SessionAction) => {
+    sessionRef.current?.send(action);
+  }, []);
+
+  const handleAdjustLife = useCallback(
+    (playerId: number, delta: number) => send({ kind: "adjustLife", playerId, delta }),
+    [send],
+  );
+  const handleAdjustCasts = useCallback(
+    (playerId: number, delta: number) => send({ kind: "adjustCasts", playerId, delta }),
+    [send],
+  );
+  const handleRename = useCallback(
+    (playerId: number, name: string) => send({ kind: "rename", playerId, name }),
+    [send],
+  );
+  const handleEndTurn = useCallback(() => send({ kind: "endTurn" }), [send]);
+  const handleSetActive = useCallback(
+    (playerId: number) => send({ kind: "setActive", playerId }),
+    [send],
+  );
+  const handleSetEliminated = useCallback(
+    (playerId: number, eliminated: boolean) => send({ kind: "setEliminated", playerId, eliminated }),
+    [send],
+  );
+  const handleAddReminder = useCallback(
+    (playerId: number, phase: ReminderPhase, text: string) =>
+      send({ kind: "addReminder", playerId, phase, text }),
+    [send],
+  );
+  const handleDismissReminder = useCallback(
+    (reminderId: number) => send({ kind: "dismissReminder", reminderId }),
+    [send],
+  );
+
+  function handleLeave() {
+    sessionRef.current?.leave();
+    sessionRef.current = null;
+    setCode(null);
+    setGame(null);
+    setEnded(false);
+    setLost(false);
+  }
+
+  if (game === null) {
+    return (
+      <div className="min-h-screen p-4 sm:p-6 lg:p-8">
+        <div className="mx-auto max-w-7xl">
+          <div className="mb-6 flex items-center justify-between gap-4">
+            <h1 className="font-display text-2xl sm:text-3xl font-bold bg-gradient-to-r from-orange-hover via-orange to-purple-light bg-clip-text text-transparent">
+              Commander Game
+            </h1>
+            <Link href="/" className="btn btn-ghost btn-sm">
+              ← Card lookup
+            </Link>
+          </div>
+          {ended && (
+            <div className="banner-error mx-auto mb-4 max-w-md p-3 text-sm">
+              The host ended the game.
+            </div>
+          )}
+          {code !== null && !ended && (
+            <div className="panel mx-auto mb-4 max-w-md p-3 text-sm text-foreground/60">
+              Joined game {code} — waiting for the host to share the board…
+            </div>
+          )}
+          <JoinGamePanel onJoin={(entered) => void joinByCode(entered)} joining={joining} error={joinError} />
+        </div>
+      </div>
+    );
+  }
+
+  const pickerPlayer = game.players.find((player) => player.id === pickerFor) ?? null;
+  const layout = layoutOverride ?? game.layout;
+
+  return (
+    <div className="flex h-dvh flex-col gap-2 overflow-hidden p-2">
+      <div className="flex shrink-0 flex-wrap items-center gap-2">
+        <LayoutToggle layout={layout} onChange={setLayoutOverride} />
+        <span className="whitespace-nowrap font-display text-sm font-bold tracking-wider text-purple-light">
+          Turn {game.turn}
+        </span>
+        {code !== null && (
+          <span className="whitespace-nowrap font-mono text-sm tracking-widest text-foreground/60">
+            {code}
+          </span>
+        )}
+        <span className="min-w-0 flex-1" />
+        <button type="button" onClick={handleLeave} className="btn btn-ghost btn-sm">
+          Leave
+        </button>
+      </div>
+
+      {lost && (
+        <div className="banner-error flex shrink-0 items-center gap-3 px-3 py-1.5 text-sm">
+          <span>Connection lost.</span>
+          <button
+            type="button"
+            onClick={() => code !== null && void joinByCode(code)}
+            className="btn btn-danger btn-sm"
+          >
+            Rejoin
+          </button>
+        </div>
+      )}
+      {!lost && !hostPresent && (
+        <div className="banner-error shrink-0 px-3 py-1.5 text-sm">
+          The host disconnected — the board stays as it was until they return.
+        </div>
+      )}
+
+      <div className="min-h-0 flex-1">
+        <GameBoard
+          game={{ ...game, layout }}
+          onAdjustLife={handleAdjustLife}
+          onAdjustCasts={handleAdjustCasts}
+          onRename={handleRename}
+          onPickCommander={setPickerFor}
+          onEndTurn={handleEndTurn}
+          onSetActive={handleSetActive}
+          onSetEliminated={handleSetEliminated}
+          onAddReminder={handleAddReminder}
+          onDismissReminder={handleDismissReminder}
+        />
+      </div>
+
+      {pickerPlayer !== null && (
+        <CommanderPicker
+          player={pickerPlayer}
+          onPick={(commander) => {
+            send({ kind: "setCommander", playerId: pickerPlayer.id, commander });
             setPickerFor(null);
           }}
           onClose={() => setPickerFor(null)}
