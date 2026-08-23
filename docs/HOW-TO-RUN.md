@@ -148,15 +148,40 @@ $env:JAVA_HOME="$env:LOCALAPPDATA\Android\jdk21"
 
 The commander game can be shared live: the app hosts, other phones join by QR code or by typing
 the 6-character code at `/game` on the web build. The relay is part of Mtg.Api
-(`/api/sessions/ws`), so nothing extra runs — but phones need URLs that resolve on the wifi, not
-`localhost`.
+(`/api/sessions/ws`), so nothing extra runs — but one rule governs everything below:
+
+> **Every device — the hosting phone and every guest — must reach the *same* Mtg.Api process.**
+> Sessions live in memory in that one process, so a code created through one PC's relay does not
+> exist on another PC's. Two machines both "running the latest" each have their own empty relay;
+> host and guests have to meet at one of them.
+
+That is why the URLs below use the PC's wifi IP, never `localhost` (which on a phone means the
+phone itself), and why the phone app must be rebuilt when the relay PC changes — its URLs are
+baked in at APK build time.
+
+### 1. Pick the relay PC and find its IP
+
+Exactly one PC runs the stack for the whole table. On it, `ipconfig` shows the wifi IPv4 address
+(e.g. `192.168.1.20`) — every command below uses that address; substitute your own.
+
+### 2. Start the API on all interfaces
 
 ```powershell
-# Terminal 1 — API listening on all interfaces so phones can reach it
 cd d:\SoftwareProjects\MTG
 dotnet run --project src/Mtg.Api --urls http://0.0.0.0:5000
+```
 
-# Terminal 2 — frontend with LAN URLs (replace 192.168.1.20 with this PC's IP, ipconfig shows it)
+The default `dotnet run` binds `localhost` only; `--urls http://0.0.0.0:5000` is what lets phones
+connect. Windows Firewall may prompt to allow `dotnet` (and `node` below) on private networks the
+first time — allow both, or phones connect to nothing and joins time out.
+
+Sanity check from a phone on the wifi before going further: open
+`http://192.168.1.20:5000/openapi/v1.json` in its browser. JSON means the phone can reach the
+relay PC; anything else is an IP or firewall problem — fix that first.
+
+### 3. Start the frontend with LAN URLs
+
+```powershell
 cd d:\SoftwareProjects\MTG\src\frontend
 $env:NEXT_PUBLIC_SESSION_WS_URL="ws://192.168.1.20:5000/api/sessions/ws"
 $env:NEXT_PUBLIC_WEB_APP_URL="http://192.168.1.20:3000"
@@ -164,15 +189,15 @@ $env:NEXT_PUBLIC_API_BASE_URL=""   # guests talk to Scryfall directly; avoids a 
 npm run dev
 ```
 
-Guests on the wifi then open `http://192.168.1.20:3000/game` (or scan the host's QR code, which
-carries that link). Sharing affordances hide entirely when `NEXT_PUBLIC_SESSION_WS_URL` is unset.
+Without these overrides, `.env.development` points guests at `ws://localhost:5000` — each guest's
+own machine, not the relay — which is exactly the "No game with that code was found" trap. Set
+them in the same terminal that runs `npm run dev`; they are read at startup.
 
-Hosting ships only in the app build, so the browser's `/game` is always the guest door. To try the
-host flow in a browser anyway, run a second dev server with `NEXT_PUBLIC_MOBILE_APP=true` (e.g. on
-`--port 3001`): the game tracker and sharing work; card search in that tab does not, because app
-mode expects the on-device data plugins.
+### 4. Rebuild the APK so the phone hosts through this PC
 
-For the APK to host sessions, set the same two variables when building it:
+The phone app's two URLs are baked in at build time (static export). An APK built for another
+machine — or built without these variables at all — cannot host through this PC, no matter how
+current its code is. Build and reinstall:
 
 ```powershell
 cd d:\SoftwareProjects\MTG\src\frontend
@@ -182,9 +207,32 @@ $env:JAVA_HOME="$env:LOCALAPPDATA\Android\jdk21"
 npm run app:apk
 ```
 
-The values are baked in at build time (static export), so a later hosted deployment means
-rebuilding with the real URLs. Windows Firewall may prompt to allow `dotnet` and `node` on private
-networks the first time — allow both, or the phones cannot connect.
+### 5. Host and join
+
+On the phone app, start sharing from the commander game — it shows the QR code and the
+6-character code. Guests on the same wifi scan the QR (its link carries the code and joins on
+arrival) or open `http://192.168.1.20:3000/game` and type the code.
+
+Hosting ships only in the app build, so the browser's `/game` is always the guest door. To try the
+host flow in a browser anyway, run a second dev server with `NEXT_PUBLIC_MOBILE_APP=true` (e.g. on
+`--port 3001`): the game tracker and sharing work; card search in that tab does not, because app
+mode expects the on-device data plugins.
+
+### If join fails
+
+The error on the join page says which step broke:
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| "No game with that code was found." | Guest reached a relay, but not the one the host is on — usually a guest page served without the step 3 overrides, or an APK baked for a different PC | Redo steps 3–4 against the one relay PC |
+| "Could not reach the session server." | The guest's ws URL points at an API that is not running, or a stale IP | Restart step 2; re-check `ipconfig` (DHCP moves IPs) |
+| "The session server did not answer in time." | Reachable address, silently dropped — almost always Windows Firewall | Allow `dotnet`/`node` on private networks |
+| No join panel at all on `/game` | `NEXT_PUBLIC_SESSION_WS_URL` was unset when the page was built/served | Step 3 (dev) or rebuild (APK); sharing hides entirely without it |
+| Phone cannot start sharing | The APK's baked ws URL does not resolve from the phone | Step 4 with this PC's current IP |
+
+Sessions are in memory only, so restarting Mtg.Api forgets every code — hosts just share again
+for a new one. A later hosted deployment (one stable relay URL) removes the per-machine rebuild;
+until then, the baked IP ties an APK to one relay PC.
 
 ## Building the hosted (static) version
 
