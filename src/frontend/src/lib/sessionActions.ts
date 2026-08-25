@@ -17,6 +17,7 @@ import {
   setCommander,
   setPlayerEliminated,
   setPlayerName,
+  setSpotlight,
   type CommanderCard,
   type GameState,
   type ReminderPhase,
@@ -31,12 +32,15 @@ export type SessionAction =
   | { kind: "setActive"; playerId: number }
   | { kind: "setEliminated"; playerId: number; eliminated: boolean }
   | { kind: "addReminder"; playerId: number; phase: ReminderPhase; text: string }
-  | { kind: "dismissReminder"; reminderId: number };
+  | { kind: "dismissReminder"; reminderId: number }
+  | { kind: "spotlight"; playerId: number; cardId: string };
 
 /** Wider than any real button press; only a malformed client sends more at once. */
 const MAX_DELTA = 999;
 const MAX_NAME_LENGTH = 60;
 const MAX_REMINDER_LENGTH = 200;
+/** Board card ids are Scryfall printing uuids (36 chars); anything longer is malformed. */
+const MAX_CARD_ID_LENGTH = 60;
 
 /**
  * Applies one already-validated action. Unknown seats and ids are the helpers' problem — every
@@ -62,6 +66,8 @@ export function applySessionAction(game: GameState, action: SessionAction): Game
       return addReminder(game, action.playerId, action.phase, action.text);
     case "dismissReminder":
       return dismissReminder(game, action.reminderId);
+    case "spotlight":
+      return setSpotlight(game, action.playerId, action.cardId);
   }
 }
 
@@ -115,6 +121,13 @@ export function parseSessionAction(value: unknown): SessionAction | null {
     case "dismissReminder":
       return Number.isInteger(value.reminderId) && typeof value.reminderId === "number"
         ? { kind: "dismissReminder", reminderId: value.reminderId }
+        : null;
+    case "spotlight":
+      return isSeatId(value.playerId) &&
+        typeof value.cardId === "string" &&
+        value.cardId !== "" &&
+        value.cardId.length <= MAX_CARD_ID_LENGTH
+        ? { kind: "spotlight", playerId: value.playerId, cardId: value.cardId }
         : null;
     default:
       return null;

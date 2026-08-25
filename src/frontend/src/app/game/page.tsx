@@ -4,6 +4,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BoardView } from "@/components/BoardView";
+import { CardImage } from "@/components/CardImage";
 import { CommanderPicker } from "@/components/CommanderPicker";
 import { GameBoard } from "@/components/GameBoard";
 import { GameSetup } from "@/components/GameSetup";
@@ -23,6 +24,7 @@ import {
   setLayout,
   setPlayerEliminated,
   setPlayerName,
+  setSpotlight,
   serializeGame,
   parseGame,
   toArPlayers,
@@ -61,6 +63,8 @@ function AppGamePage() {
   const [error, setError] = useState<string | null>(null);
   // "life" is the tracker everyone taps; "board" is the read-only scanned-table view.
   const [view, setView] = useState<GameView>("life");
+  // Dismissal is this device's own; the shared state only carries what is spotlighted.
+  const [dismissedSpotlightId, setDismissedSpotlightId] = useState(0);
 
   useEffect(() => {
     const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -68,7 +72,8 @@ function AppGamePage() {
     /* eslint-disable react-hooks/set-state-in-effect -- storage is client-only, so the saved
        game can only be read after hydration; a synchronous set right here is that pattern. */
     if (saved !== null) {
-      setGame(saved);
+      // A call-out is a live gesture; one from a previous sitting must not pop on load.
+      setGame({ ...saved, spotlight: null });
     }
     setRestored(true);
     /* eslint-enable react-hooks/set-state-in-effect */
@@ -132,6 +137,9 @@ function AppGamePage() {
   // ShareGameControls then carries the result back to every guest.
   const handleSessionAction = useCallback((action: SessionAction) => {
     setGame((current) => (current === null ? current : applySessionAction(current, action)));
+  }, []);
+  const handleSpotlight = useCallback((playerId: number, cardId: string) => {
+    setGame((current) => (current === null ? current : setSpotlight(current, playerId, cardId)));
   }, []);
 
   function handleNewGame() {
@@ -240,7 +248,7 @@ function AppGamePage() {
 
       <div className="min-h-0 flex-1">
         {view === "board" ? (
-          <BoardView game={game} />
+          <BoardView game={game} onSpotlight={handleSpotlight} />
         ) : (
           <GameBoard
             game={game}
@@ -269,6 +277,12 @@ function AppGamePage() {
           onClose={() => setPickerFor(null)}
         />
       )}
+
+      <SpotlightOverlay
+        game={game}
+        dismissedId={dismissedSpotlightId}
+        onDismiss={setDismissedSpotlightId}
+      />
     </div>
   );
 }
@@ -295,6 +309,8 @@ function WebGamePage() {
   // guest keeps a local override instead of following it.
   const [layoutOverride, setLayoutOverride] = useState<GameLayout | null>(null);
   const [view, setView] = useState<GameView>("life");
+  // Dismissal is this device's own; the shared state only carries what is spotlighted.
+  const [dismissedSpotlightId, setDismissedSpotlightId] = useState(0);
 
   const sessionRef = useRef<GuestSession | null>(null);
   // Re-entry guard the callback can trust: the `joining` state is stale inside its closure, and
@@ -389,6 +405,11 @@ function WebGamePage() {
     (reminderId: number) => send({ kind: "dismissReminder", reminderId }),
     [send],
   );
+  // The host applies it and the state round-trips back, so seeing the overlay confirms delivery.
+  const handleSpotlight = useCallback(
+    (playerId: number, cardId: string) => send({ kind: "spotlight", playerId, cardId }),
+    [send],
+  );
 
   function handleLeave() {
     sessionRef.current?.leave();
@@ -469,7 +490,7 @@ function WebGamePage() {
 
       <div className="min-h-0 flex-1">
         {view === "board" ? (
-          <BoardView game={game} />
+          <BoardView game={game} onSpotlight={handleSpotlight} />
         ) : (
           <GameBoard
             game={{ ...game, layout }}
@@ -496,12 +517,71 @@ function WebGamePage() {
           onClose={() => setPickerFor(null)}
         />
       )}
+
+      <SpotlightOverlay
+        game={game}
+        dismissedId={dismissedSpotlightId}
+        onDismiss={setDismissedSpotlightId}
+      />
     </div>
   );
 }
 
 /** What the main area shows: the tappable life tracker, or the scanned top-down board. */
 type GameView = "life" | "board";
+
+/**
+ * The called-out card, big and readable over whatever this device is showing. Tapping anywhere
+ * puts it away on this device only — the call-out itself lives in the shared state, so every
+ * screen dismisses at its own pace and a new call-out shows everywhere again.
+ */
+function SpotlightOverlay({
+  game,
+  dismissedId,
+  onDismiss,
+}: {
+  game: GameState;
+  dismissedId: number;
+  onDismiss: (spotlightId: number) => void;
+}) {
+  const spotlight = game.spotlight;
+  if (spotlight === null || spotlight.id === dismissedId) {
+    return null;
+  }
+  // The card may have left the board since it was called out; then there is nothing to show.
+  const player = game.players.find((candidate) => candidate.id === spotlight.playerId);
+  const card = player?.board.find((candidate) => candidate.id === spotlight.cardId);
+  if (player === undefined || card === undefined) {
+    return null;
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => onDismiss(spotlight.id)}
+      aria-label={`Dismiss spotlighted card ${card.name}`}
+      className="fixed inset-0 z-50 flex cursor-pointer flex-col items-center justify-center gap-3 bg-background-deep/85 p-4"
+    >
+      {card.imageUrl !== null ? (
+        <CardImage
+          src={card.imageUrl}
+          alt={card.name}
+          width={300}
+          height={419}
+          foil={false}
+          className="max-h-[70dvh] w-auto rounded-xl"
+        />
+      ) : (
+        <div className="flex h-64 w-48 items-center justify-center rounded-xl border border-purple/40 bg-background-deep/60 p-3 text-center">
+          {card.name}
+        </div>
+      )}
+      <p className="text-sm text-foreground/80">
+        {player.name} · {card.name}
+      </p>
+    </button>
+  );
+}
 
 function ViewToggle({
   view,

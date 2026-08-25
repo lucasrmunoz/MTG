@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CardImage } from "@/components/CardImage";
 import {
   boardRow,
@@ -15,9 +15,15 @@ import {
  * The top-down table: every player's scanned cards lined up by row — creatures, lands, then
  * everything else — with their counters and the flying marker. Read-only by design: the AR
  * screen is the sole writer of boards, this view just shows what it tracked. The filter is
- * per-device; each viewer picks whose side they are studying.
+ * per-device; each viewer picks whose side they are studying. Long-pressing a card calls it
+ * out to every screen in the session via {@link BoardViewProps.onSpotlight}.
  */
-export function BoardView({ game }: { game: GameState }) {
+interface BoardViewProps {
+  game: GameState;
+  onSpotlight: (playerId: number, cardId: string) => void;
+}
+
+export function BoardView({ game, onSpotlight }: BoardViewProps) {
   const [filterPlayerId, setFilterPlayerId] = useState<number | null>(null);
 
   const shown = game.players.filter(
@@ -48,6 +54,7 @@ export function BoardView({ game }: { game: GameState }) {
             key={player.id}
             player={player}
             isActive={player.id === game.activePlayerId}
+            onSpotlight={onSpotlight}
           />
         ))}
       </div>
@@ -82,7 +89,15 @@ const ROWS: { row: BoardRow; label: string }[] = [
   { row: "other", label: "Other" },
 ];
 
-function PlayerBoard({ player, isActive }: { player: Player; isActive: boolean }) {
+function PlayerBoard({
+  player,
+  isActive,
+  onSpotlight,
+}: {
+  player: Player;
+  isActive: boolean;
+  onSpotlight: (playerId: number, cardId: string) => void;
+}) {
   const byRow = new Map<BoardRow, BoardCard[]>();
   for (const card of player.board) {
     const row = boardRow(card);
@@ -124,7 +139,11 @@ function PlayerBoard({ player, isActive }: { player: Player; isActive: boolean }
               <p className="mb-1 text-xs uppercase tracking-wider text-foreground/40">{label}</p>
               <div className="flex flex-wrap gap-2">
                 {cards.map((card) => (
-                  <BoardCardTile key={card.id} card={card} />
+                  <BoardCardTile
+                    key={card.id}
+                    card={card}
+                    onLongPress={() => onSpotlight(player.id, card.id)}
+                  />
                 ))}
               </div>
             </div>
@@ -135,7 +154,37 @@ function PlayerBoard({ player, isActive }: { player: Player; isActive: boolean }
   );
 }
 
-function BoardCardTile({ card }: { card: BoardCard }) {
+/** How long a press must hold before it becomes a call-out rather than a scroll or a tap. */
+const LONG_PRESS_MS = 500;
+
+/**
+ * Fires on a held press — touch or mouse — without stealing scrolls or taps: any pointer end,
+ * exit or cancellation (scrolling cancels the pointer) stops the timer. The context menu is
+ * suppressed so a long-press on Android spotlights instead of opening the image menu.
+ */
+function useLongPress(onLongPress: () => void) {
+  const timer = useRef<number | null>(null);
+  const cancel = () => {
+    if (timer.current !== null) {
+      window.clearTimeout(timer.current);
+      timer.current = null;
+    }
+  };
+  useEffect(() => cancel, []);
+  return {
+    onPointerDown: () => {
+      cancel();
+      timer.current = window.setTimeout(onLongPress, LONG_PRESS_MS);
+    },
+    onPointerUp: cancel,
+    onPointerLeave: cancel,
+    onPointerCancel: cancel,
+    onContextMenu: (event: React.MouseEvent) => event.preventDefault(),
+  };
+}
+
+function BoardCardTile({ card, onLongPress }: { card: BoardCard; onLongPress: () => void }) {
+  const pressHandlers = useLongPress(onLongPress);
   const statDelta =
     card.power !== 0 || card.toughness !== 0
       ? `${card.power >= 0 ? `+${card.power}` : card.power}/${
@@ -146,7 +195,12 @@ function BoardCardTile({ card }: { card: BoardCard }) {
   const otherKeywords = card.keywords.filter((keyword) => keyword.toLowerCase() !== "flying");
 
   return (
-    <figure className="relative w-24" title={card.name}>
+    <figure
+      className="relative w-24 select-none"
+      title={card.name}
+      style={{ WebkitTouchCallout: "none" }}
+      {...pressHandlers}
+    >
       {card.imageUrl !== null ? (
         <CardImage
           src={card.imageUrl}

@@ -80,6 +80,19 @@ export interface Player {
  */
 export type GameLayout = "grid" | "table";
 
+/**
+ * A board card called out for every screen in the session to look at. The id makes each
+ * call-out distinct, so a device that dismissed one still shows the next — dismissal is
+ * per-device, never shared.
+ */
+export interface Spotlight {
+  id: number;
+  /** Whose side of the table the card sits on. */
+  playerId: number;
+  /** The {@link BoardCard} id (printing id) on that player's board. */
+  cardId: string;
+}
+
 /** The turn moments a reminder can anchor to; coarse on purpose — no full phase stepper. */
 export const REMINDER_PHASES = ["upkeep", "draw", "combat", "end step"] as const;
 export type ReminderPhase = (typeof REMINDER_PHASES)[number];
@@ -109,6 +122,8 @@ export interface GameState {
   reminders: Reminder[];
   /** Next reminder id to hand out; ids stay unique across dismissals. */
   nextReminderId: number;
+  /** The card currently called out to every screen, or null when nothing is. */
+  spotlight: Spotlight | null;
 }
 
 export const MIN_PLAYERS = 2;
@@ -137,6 +152,7 @@ export function createGame(
     turn: 1,
     reminders: [],
     nextReminderId: 1,
+    spotlight: null,
   };
 }
 
@@ -286,6 +302,18 @@ export function setLayout(game: GameState, layout: GameLayout): GameState {
   return { ...game, layout };
 }
 
+/**
+ * Calls a board card out to every screen. A card the board does not hold leaves the game
+ * unchanged, so a stale call-out (the card was removed meanwhile) is a no-op, never a crash.
+ */
+export function setSpotlight(game: GameState, playerId: number, cardId: string): GameState {
+  const player = game.players.find((candidate) => candidate.id === playerId);
+  if (player === undefined || !player.board.some((card) => card.id === cardId)) {
+    return game;
+  }
+  return { ...game, spotlight: { id: (game.spotlight?.id ?? 0) + 1, playerId, cardId } };
+}
+
 function updatePlayer(
   game: GameState,
   playerId: number,
@@ -433,7 +461,27 @@ export function parseGame(raw: string): GameState | null {
   if (turnState === null) {
     return null;
   }
-  return { startingLife, layout, players: parsedPlayers, ...turnState };
+  return {
+    startingLife,
+    layout,
+    players: parsedPlayers,
+    ...turnState,
+    spotlight: parseSpotlight(envelope.game.spotlight),
+  };
+}
+
+/** Null for absent or malformed — a bad call-out never costs the save it rides in. */
+function parseSpotlight(value: unknown): Spotlight | null {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "number" ||
+    typeof value.playerId !== "number" ||
+    typeof value.cardId !== "string" ||
+    value.cardId === ""
+  ) {
+    return null;
+  }
+  return { id: Math.trunc(value.id), playerId: value.playerId, cardId: value.cardId };
 }
 
 type TurnState = Pick<GameState, "activePlayerId" | "turn" | "reminders" | "nextReminderId">;
