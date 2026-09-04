@@ -32,6 +32,7 @@ src/
     android/         Capacitor Android project wrapping the static export into an APK
 docs/
   HOW-TO-RUN.md
+.chadley/            Review proposals — see Notes
 ```
 
 `Mtg.Core` has no dependency on ASP.NET — it is a plain library, so a console app or a test project
@@ -237,6 +238,11 @@ In doing so it also fixes what the pattern had constrained:
 
 ## Notes
 
+- `.chadley/` holds review proposals filed by chadley, a personal watcher that patrols the repo
+  read-only and writes up what it finds. One file per finding, named by a content fingerprint, with
+  the evidence and the suggested fix in the body. Nothing in the build or the app reads them — they
+  are kept so a finding that has been looked at once is not re-filed. The `expeditions/` run logs
+  underneath are machine output and are not tracked.
 - `src/frontend/src/lib/decks.ts` is dead code, kept deliberately. The deck-building UI was removed
   — this is a card lookup, not a deck builder — but the colour definitions are retained for planned
   work on card colours. Delete it if that never happens.
@@ -247,3 +253,12 @@ In doing so it also fixes what the pattern had constrained:
   image optimiser fetches sources server-side with Node's default User-Agent, so every card image
   came back 400. Letting the browser load Scryfall's CDN directly avoids it. Do not remove that flag
   without solving the User-Agent problem first.
+
+## License
+
+The code in this repository is MIT licensed — see [LICENSE](LICENSE).
+
+That covers the code only. Card names, oracle text, artwork and prices are fetched at runtime from
+the [Scryfall API](https://scryfall.com/docs/api) and are not redistributed here; Magic: The
+Gathering and its card content are property of Wizards of the Coast. This is an unofficial fan
+project with no affiliation to or endorsement by Wizards of the Coast or Scryfall.
