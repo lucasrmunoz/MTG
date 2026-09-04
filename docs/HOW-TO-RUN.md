@@ -8,7 +8,7 @@
 ## One command
 
 ```powershell
-cd d:\SoftwareProjects\MTG
+cd path\to\MTG
 npm run dev
 ```
 
@@ -35,11 +35,11 @@ Two terminals, API first:
 
 ```powershell
 # Terminal 1
-cd d:\SoftwareProjects\MTG
+cd path\to\MTG
 dotnet run --project src/Mtg.Api
 
 # Terminal 2
-cd d:\SoftwareProjects\MTG\src\frontend
+cd path\to\MTG\src\frontend
 npm run dev
 ```
 
@@ -51,10 +51,10 @@ The OpenAPI document is at `http://localhost:5000/openapi/v1.json`.
 ## Checks before committing
 
 ```powershell
-# From d:\SoftwareProjects\MTG
+# From path\to\MTG
 dotnet build -warnaserror
 
-# From d:\SoftwareProjects\MTG\src\frontend
+# From path\to\MTG\src\frontend
 npm run typecheck
 npm run lint
 npm run build
@@ -109,7 +109,7 @@ section of the README for what it does differently. Toolchain (no Android Studio
 Build:
 
 ```powershell
-cd d:\SoftwareProjects\MTG\src\frontend
+cd path\to\MTG\src\frontend
 $env:JAVA_HOME="$env:LOCALAPPDATA\Android\jdk21"
 npm run app:apk
 ```
@@ -139,7 +139,7 @@ The **View in AR** feature additionally needs, on the phone:
 Android unit tests (counter model and store):
 
 ```powershell
-cd d:\SoftwareProjects\MTG\src\frontend\android
+cd path\to\MTG\src\frontend\android
 $env:JAVA_HOME="$env:LOCALAPPDATA\Android\jdk21"
 .\gradlew :app:testDebugUnitTest
 ```
@@ -167,7 +167,7 @@ Exactly one PC runs the stack for the whole table. On it, `ipconfig` shows the w
 ### 2. Start the API on all interfaces
 
 ```powershell
-cd d:\SoftwareProjects\MTG
+cd path\to\MTG
 dotnet run --project src/Mtg.Api --urls http://0.0.0.0:5000
 ```
 
@@ -182,7 +182,7 @@ relay PC; anything else is an IP or firewall problem — fix that first.
 ### 3. Start the frontend with LAN URLs
 
 ```powershell
-cd d:\SoftwareProjects\MTG\src\frontend
+cd path\to\MTG\src\frontend
 $env:NEXT_PUBLIC_SESSION_WS_URL="ws://192.168.1.20:5000/api/sessions/ws"
 $env:NEXT_PUBLIC_WEB_APP_URL="http://192.168.1.20:3000"
 $env:NEXT_PUBLIC_API_BASE_URL=""   # guests talk to Scryfall directly; avoids a CORS entry
@@ -200,7 +200,7 @@ machine — or built without these variables at all — cannot host through this
 current its code is. Build and reinstall:
 
 ```powershell
-cd d:\SoftwareProjects\MTG\src\frontend
+cd path\to\MTG\src\frontend
 $env:NEXT_PUBLIC_SESSION_WS_URL="ws://192.168.1.20:5000/api/sessions/ws"
 $env:NEXT_PUBLIC_WEB_APP_URL="http://192.168.1.20:3000"
 $env:JAVA_HOME="$env:LOCALAPPDATA\Android\jdk21"
@@ -240,7 +240,7 @@ The GitHub Pages build has no API behind it and talks to Scryfall directly, so o
 prices are available. To produce it locally:
 
 ```powershell
-cd d:\SoftwareProjects\MTG\src\frontend
+cd path\to\MTG\src\frontend
 $env:GITHUB_PAGES="true"; npm run build   # output in src/frontend/out
 ```
 
