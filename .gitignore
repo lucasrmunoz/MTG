@@ -11,3 +11,6 @@ next-env.d.ts
 
 # Local environment
 .env*.local
+
+# chadley run logs — machine output, not a record worth keeping
+.chadley/expeditions/
