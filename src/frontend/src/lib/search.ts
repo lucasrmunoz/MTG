@@ -18,29 +18,30 @@ export const CARD_TYPES: readonly { id: string; label: string }[] = [
 
 /**
  * Extra narrowing available once the type is Land: supertypes like Basic and Snow, and land
- * subtypes from the five basic types through to Town and Planet. Every selected trait must match,
- * so Basic + Island finds the basic Islands and Island + Swamp finds the Island Swamp duals.
+ * subtypes from the five basic types through to Town and Planet, listed alphabetically. Every
+ * selected trait must match, so Basic + Island finds the basic Islands and Island + Swamp finds
+ * the Island Swamp duals.
  *
  * Each trait's `query` is its Scryfall clause. Mirrors ScryfallFilterQuery.
  */
 export const LAND_TRAITS: readonly { id: string; label: string; query: string }[] = [
   { id: "basic", label: "Basic", query: "t:basic" },
-  { id: "nonbasic", label: "Nonbasic", query: "-t:basic" },
-  { id: "snow", label: "Snow", query: "t:snow" },
-  { id: "legendary", label: "Legendary", query: "t:legendary" },
-  { id: "plains", label: "Plains", query: "t:plains" },
-  { id: "island", label: "Island", query: "t:island" },
-  { id: "swamp", label: "Swamp", query: "t:swamp" },
-  { id: "mountain", label: "Mountain", query: "t:mountain" },
-  { id: "forest", label: "Forest", query: "t:forest" },
   { id: "cave", label: "Cave", query: "t:cave" },
   { id: "desert", label: "Desert", query: "t:desert" },
+  { id: "forest", label: "Forest", query: "t:forest" },
   { id: "gate", label: "Gate", query: "t:gate" },
+  { id: "island", label: "Island", query: "t:island" },
   { id: "lair", label: "Lair", query: "t:lair" },
+  { id: "legendary", label: "Legendary", query: "t:legendary" },
   { id: "locus", label: "Locus", query: "t:locus" },
-  { id: "sphere", label: "Sphere", query: "t:sphere" },
-  { id: "town", label: "Town", query: "t:town" },
+  { id: "mountain", label: "Mountain", query: "t:mountain" },
+  { id: "nonbasic", label: "Nonbasic", query: "-t:basic" },
+  { id: "plains", label: "Plains", query: "t:plains" },
   { id: "planet", label: "Planet", query: "t:planet" },
+  { id: "snow", label: "Snow", query: "t:snow" },
+  { id: "sphere", label: "Sphere", query: "t:sphere" },
+  { id: "swamp", label: "Swamp", query: "t:swamp" },
+  { id: "town", label: "Town", query: "t:town" },
 ];
 
 /** Constraints a search applies alongside the name term. */

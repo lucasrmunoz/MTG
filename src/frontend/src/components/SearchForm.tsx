@@ -33,6 +33,11 @@ export function SearchForm({
     >
       <label htmlFor="card-name" className="section-title mb-3">
         Card Name
+        {filtered && (
+          <span className="font-sans normal-case tracking-normal font-normal text-foreground/50 text-xs">
+            optional while a filter is on
+          </span>
+        )}
       </label>
       <div className="flex gap-3">
         <input

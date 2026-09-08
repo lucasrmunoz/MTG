@@ -29,22 +29,22 @@ public static class ScryfallFilterQuery
     private static readonly FrozenDictionary<string, string> LandTraits = new Dictionary<string, string>
     {
         ["basic"] = "t:basic",
-        ["nonbasic"] = "-t:basic",
-        ["snow"] = "t:snow",
-        ["legendary"] = "t:legendary",
-        ["plains"] = "t:plains",
-        ["island"] = "t:island",
-        ["swamp"] = "t:swamp",
-        ["mountain"] = "t:mountain",
-        ["forest"] = "t:forest",
         ["cave"] = "t:cave",
         ["desert"] = "t:desert",
+        ["forest"] = "t:forest",
         ["gate"] = "t:gate",
+        ["island"] = "t:island",
         ["lair"] = "t:lair",
+        ["legendary"] = "t:legendary",
         ["locus"] = "t:locus",
-        ["sphere"] = "t:sphere",
-        ["town"] = "t:town",
+        ["mountain"] = "t:mountain",
+        ["nonbasic"] = "-t:basic",
+        ["plains"] = "t:plains",
         ["planet"] = "t:planet",
+        ["snow"] = "t:snow",
+        ["sphere"] = "t:sphere",
+        ["swamp"] = "t:swamp",
+        ["town"] = "t:town",
     }.ToFrozenDictionary();
 
     private static readonly FrozenSet<string> ColorModes = FrozenSet.ToFrozenSet(["contains", "only"]);
