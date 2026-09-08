@@ -97,7 +97,10 @@ curl "http://localhost:5000/api/cards/search?name=bolt&type=instant&colors=U"
 # Filter only — every Planet land, no name needed
 curl "http://localhost:5000/api/cards/search?type=land&landTraits=planet"
 
-# Two land traits, both required — the basic Islands
+# Two land types, either one — every Gate and every Town
+curl "http://localhost:5000/api/cards/search?type=land&landTraits=gate&landTraits=town"
+
+# A trait plus a land type, both required — the basic Islands
 curl "http://localhost:5000/api/cards/search?type=land&landTraits=basic&landTraits=island"
 
 # Missing name — 400 problem details

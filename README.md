@@ -10,8 +10,8 @@ vendors. Card data comes from the [Scryfall API](https://scryfall.com/docs/api).
 - Misspellings still land: a term no name contains falls back to fuzzy matching, so "snapcastr mage"
   finds Snapcaster Mage.
 - Narrow a search by card type and color, and for lands by basic/nonbasic, snow, legendary, or
-  land type — Island, Cave, Town, Planet and more. A filter alone works too: no name needed to
-  list every Planet.
+  land type — Island, Cave, Town, Planet and more, any of the selected types. A filter alone works
+  too: no name needed to list every Gate and Town.
 - See the full card: type line, mana cost, power/toughness or loyalty, keywords, oracle text, and
   which set and rarity the printing is.
 - Browse every printing of that card that uses distinct artwork, oldest first, and pick one.
@@ -60,9 +60,11 @@ Search takes optional filters, ANDed with the name: `type=` (one of `artifact`, 
 `creature`, `enchantment`, `instant`, `kindred`, `land`, `planeswalker`, `sorcery`), `colors=`
 (WUBRG letters, e.g. `WU`) with `colorMode=contains` (every listed color, others allowed — the
 default) or `colorMode=only` (no color outside the list), and, when `type=land`, one or more
-`landTraits=` (`basic`, `nonbasic`, `snow`, `legendary`, the five basic land types, `cave`,
-`desert`, `gate`, `lair`, `locus`, `sphere`, `town`, `planet`). For lands the color filter goes by
-color identity, since lands are colorless as printed. With a filter set, `name` may be empty.
+`landTraits=`. Traits `basic`, `nonbasic`, `snow` and `legendary` must all hold; land types (the
+five basic types, `cave`, `desert`, `gate`, `lair`, `locus`, `sphere`, `town`, `planet`) match
+when any one is present, so `landTraits=gate&landTraits=town` lists every Gate and every Town. For
+lands the color filter goes by color identity, since lands are colorless as printed. With a filter
+set, `name` may be empty.
 Fuzzy matching only kicks in for an unfiltered search, since it cannot honour filters.
 
 When Scryfall itself is unreachable, both return `502` with a problem detail saying so — distinct from

@@ -29,19 +29,24 @@ public static class ScryfallFilterQuery
     private static readonly FrozenDictionary<string, string> LandTraits = new Dictionary<string, string>
     {
         ["basic"] = "t:basic",
+        ["legendary"] = "t:legendary",
+        ["nonbasic"] = "-t:basic",
+        ["snow"] = "t:snow",
+    }.ToFrozenDictionary();
+
+    /// <summary>Land subtype id to its Scryfall clause. A land matches when it has any selected one.</summary>
+    private static readonly FrozenDictionary<string, string> LandTypes = new Dictionary<string, string>
+    {
         ["cave"] = "t:cave",
         ["desert"] = "t:desert",
         ["forest"] = "t:forest",
         ["gate"] = "t:gate",
         ["island"] = "t:island",
         ["lair"] = "t:lair",
-        ["legendary"] = "t:legendary",
         ["locus"] = "t:locus",
         ["mountain"] = "t:mountain",
-        ["nonbasic"] = "-t:basic",
         ["plains"] = "t:plains",
         ["planet"] = "t:planet",
-        ["snow"] = "t:snow",
         ["sphere"] = "t:sphere",
         ["swamp"] = "t:swamp",
         ["town"] = "t:town",
@@ -75,10 +80,12 @@ public static class ScryfallFilterQuery
             return $"Unknown color mode '{filters.ColorMode}'. Expected one of: {string.Join(", ", ColorModes)}.";
         }
 
-        var badTrait = filters.LandTraits.FirstOrDefault(trait => !LandTraits.ContainsKey(trait));
+        var badTrait = filters.LandTraits.FirstOrDefault(
+            trait => !LandTraits.ContainsKey(trait) && !LandTypes.ContainsKey(trait));
         if (badTrait is not null)
         {
-            return $"Unknown land trait '{badTrait}'. Expected one of: {string.Join(", ", LandTraits.Keys)}.";
+            return $"Unknown land trait '{badTrait}'. Expected one of: "
+                + $"{string.Join(", ", LandTraits.Keys.Concat(LandTypes.Keys).Order())}.";
         }
 
         return null;
@@ -91,7 +98,8 @@ public static class ScryfallFilterQuery
     /// Colors use <c>color&gt;=</c> ("contains") or <c>color&lt;=</c> ("only") — except for
     /// lands, which are colorless as printed: there the filter goes by color identity
     /// (<c>id</c>) instead, so "blue lands" finds Island and Breeding Pool rather than nothing.
-    /// Land traits apply only when the type is land.
+    /// Land traits apply only when the type is land: each trait is ANDed, while the land types are
+    /// ORed together in one parenthesised clause, so Gate + Town lists every Gate and every Town.
     /// </remarks>
     /// <exception cref="ArgumentException">A filter value is unknown; see <see cref="Validate"/>.</exception>
     public static IReadOnlyList<string> Build(CardSearchFilters filters)
@@ -118,7 +126,13 @@ public static class ScryfallFilterQuery
 
         if (filters.Type == LandType)
         {
-            clauses.AddRange(filters.LandTraits.Select(trait => LandTraits[trait]));
+            clauses.AddRange(filters.LandTraits.Where(LandTraits.ContainsKey).Select(trait => LandTraits[trait]));
+
+            var types = filters.LandTraits.Where(LandTypes.ContainsKey).Select(type => LandTypes[type]).ToList();
+            if (types.Count > 0)
+            {
+                clauses.Add($"({string.Join(" or ", types)})");
+            }
         }
 
         return clauses;
