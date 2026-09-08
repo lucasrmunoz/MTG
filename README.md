@@ -9,6 +9,9 @@ vendors. Card data comes from the [Scryfall API](https://scryfall.com/docs/api).
   name, in any word order, and matching inside words too ("olt" finds Aether Revolt).
 - Misspellings still land: a term no name contains falls back to fuzzy matching, so "snapcastr mage"
   finds Snapcaster Mage.
+- Narrow a search by card type and color, and for lands by basic/nonbasic, snow, legendary, or
+  land type — Island, Cave, Town, Planet and more. A filter alone works too: no name needed to
+  list every Planet.
 - See the full card: type line, mana cost, power/toughness or loyalty, keywords, oracle text, and
   which set and rarity the printing is.
 - Browse every printing of that card that uses distinct artwork, oldest first, and pick one.
@@ -45,13 +48,22 @@ details.
 
 | Method | Route | Returns |
 |---|---|---|
-| `GET` | `/api/cards/search?name=` | `200` matching cards and a total count, empty when nothing matches · `400` missing `name` |
+| `GET` | `/api/cards/search?name=` | `200` matching cards and a total count, empty when nothing matches · `400` missing `name` (unless a filter is set) or an unknown filter value |
 | `GET` | `/api/cards/art?name=` | `200` art versions, empty array when the name matches nothing |
 | `GET` | `/api/vendors` | `200` price vendors, their price basis, and whether each feed has loaded |
 
 Search returns `{ "cards": [...], "totalMatches": n }`. `totalMatches` can exceed `cards.length` —
 Scryfall pages at 175, and "a" matches over 25,000 cards — so the UI can say what it is not showing
 rather than truncating silently.
+
+Search takes optional filters, ANDed with the name: `type=` (one of `artifact`, `battle`,
+`creature`, `enchantment`, `instant`, `kindred`, `land`, `planeswalker`, `sorcery`), `colors=`
+(WUBRG letters, e.g. `WU`) with `colorMode=contains` (every listed color, others allowed — the
+default) or `colorMode=only` (no color outside the list), and, when `type=land`, one or more
+`landTraits=` (`basic`, `nonbasic`, `snow`, `legendary`, the five basic land types, `cave`,
+`desert`, `gate`, `lair`, `locus`, `sphere`, `town`, `planet`). For lands the color filter goes by
+color identity, since lands are colorless as printed. With a filter set, `name` may be empty.
+Fuzzy matching only kicks in for an unfiltered search, since it cannot honour filters.
 
 When Scryfall itself is unreachable, both return `502` with a problem detail saying so — distinct from
 an empty result meaning no card name matches.

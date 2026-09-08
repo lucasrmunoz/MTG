@@ -9,6 +9,7 @@
  */
 
 import type { ColorMatchMode } from "@/lib/colors";
+import { NO_FILTERS, type SearchFilters } from "@/lib/search";
 import * as cardKingdom from "@/lib/sources/cardKingdom";
 import * as manaPool from "@/lib/sources/manaPool";
 import * as scryfall from "@/lib/sources/scryfall";
@@ -61,8 +62,11 @@ async function enrich<T extends Priced>(items: T[]): Promise<T[]> {
   });
 }
 
-export async function searchCards(name: string): Promise<CardSearchResult> {
-  const result = await scryfall.searchCards(name);
+export async function searchCards(
+  name: string,
+  filters: SearchFilters = NO_FILTERS,
+): Promise<CardSearchResult> {
+  const result = await scryfall.searchCards(name, filters);
   return { ...result, cards: await enrich(result.cards) };
 }
 

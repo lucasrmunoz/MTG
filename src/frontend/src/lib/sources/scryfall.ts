@@ -11,6 +11,7 @@
 
 import type { ColorMatchMode } from "@/lib/colors";
 import { ApiError } from "@/lib/errors";
+import { buildFilterQuery, NO_FILTERS, type SearchFilters } from "@/lib/search";
 import type {
   ArtVersion,
   Card,
@@ -248,36 +249,45 @@ async function findByFuzzyName(name: string): Promise<CardSearchResult> {
 }
 
 /**
- * Finds every card whose name contains the term.
+ * Finds every card whose name contains the term and passes the filters.
  *
  * Each whitespace-separated word must appear somewhere in the name, in any order: "bolt light" and
  * "light bolt" both find Lightning Bolt. `name:` matches inside words too, so "olt" finds Aether
- * Revolt. Only the first page comes back; `totalMatches` says how many there were altogether.
+ * Revolt. With a filter set the name may be empty, listing everything the filter admits. Only the
+ * first page comes back; `totalMatches` says how many there were altogether.
  *
- * A term that no name contains falls back to fuzzy matching. Mirrors ScryfallClient.
+ * A term that no name contains falls back to fuzzy matching — but only when nothing is filtered,
+ * since the fuzzy lookup knows nothing of filters and its answer could break them. Mirrors
+ * ScryfallClient.
  */
-export async function searchCards(name: string): Promise<CardSearchResult> {
-  const query = buildNameQuery(name);
-  if (query === null) {
+export async function searchCards(
+  name: string,
+  filters: SearchFilters = NO_FILTERS,
+): Promise<CardSearchResult> {
+  const nameQuery = buildNameQuery(name);
+  const filterClauses = buildFilterQuery(filters);
+  if (nameQuery === null && filterClauses.length === 0) {
     return { cards: [], totalMatches: 0 };
   }
 
+  const query = [nameQuery, ...filterClauses].filter((clause) => clause !== null).join(" ");
   const url = `${SCRYFALL}/cards/search?q=${encodeURIComponent(query)}&unique=cards&order=name&dir=asc`;
+  const canFuzzyMatch = nameQuery !== null && filterClauses.length === 0;
 
   let result: ScryfallList;
   try {
     result = await getJson<ScryfallList>(url, `card search for '${name}'`);
   } catch (err) {
-    // A 404 means no card name contains the term, which is an empty page, not a failure.
+    // A 404 means nothing matched the query, which is an empty page, not a failure.
     if (err instanceof ApiError && err.status === 404) {
-      return findByFuzzyName(name);
+      return canFuzzyMatch ? findByFuzzyName(name) : { cards: [], totalMatches: 0 };
     }
     throw err;
   }
 
   const matches = result.data ?? [];
   if (matches.length === 0) {
-    return findByFuzzyName(name);
+    return canFuzzyMatch ? findByFuzzyName(name) : { cards: [], totalMatches: 0 };
   }
 
   const term = name.trim();

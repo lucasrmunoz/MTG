@@ -25,7 +25,7 @@ const source = isMobileApp
     ? createClient(apiBaseUrl)
     : scryfall;
 
-/** Finds every card whose name contains the search term, best match first. */
+/** Finds every card whose name contains the search term and passes the filters, best match first. */
 export const searchCards = source.searchCards;
 
 /** Lists every printing of a card with distinct artwork, oldest first. */

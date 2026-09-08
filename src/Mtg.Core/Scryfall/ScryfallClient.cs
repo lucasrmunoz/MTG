@@ -25,41 +25,51 @@ public sealed class ScryfallClient(HttpClient httpClient, ILogger<ScryfallClient
     private const int MaxArtPages = 10;
 
     /// <summary>
-    /// Finds every card whose name contains the search term.
+    /// Finds every card whose name contains the search term and passes the filters.
     /// </summary>
     /// <remarks>
     /// Each whitespace-separated word must appear somewhere in the name, in any order: "bolt light"
     /// and "light bolt" both find Lightning Bolt. Scryfall's <c>name:</c> operator matches inside
-    /// words too, so "olt" finds Aether Revolt. Only the first page of results is returned —
+    /// words too, so "olt" finds Aether Revolt. With a filter set the term may be empty, listing
+    /// everything the filter admits. Only the first page of results is returned —
     /// <see cref="CardSearchResult.TotalMatches"/> reports how many there were altogether.
     /// <para>
     /// A term that no name contains falls back to Scryfall's fuzzy lookup, which tolerates
-    /// misspellings a substring match cannot.
+    /// misspellings a substring match cannot — but only when nothing is filtered, since the fuzzy
+    /// lookup knows nothing of filters and its answer could break them.
     /// </para>
     /// </remarks>
-    /// <param name="searchTerm">Whole or partial card name, e.g. "lightning bolt" or "bolt".</param>
+    /// <param name="searchTerm">Whole or partial card name, e.g. "lightning bolt" or "bolt". May be empty when filters are set.</param>
+    /// <param name="filters">Type, color and land-trait constraints; <see cref="CardSearchFilters.None"/> for none.</param>
     /// <param name="cancellationToken">Cancels the outbound request.</param>
     /// <returns>Matching cards, closest match first; empty when nothing matches.</returns>
+    /// <exception cref="ArgumentException">A filter value is unknown; see <see cref="ScryfallFilterQuery.Validate"/>.</exception>
     /// <exception cref="ScryfallException">Scryfall was unreachable or returned an unusable response.</exception>
-    public async Task<CardSearchResult> SearchCardsByNameAsync(
+    public async Task<CardSearchResult> SearchCardsAsync(
         string searchTerm,
+        CardSearchFilters filters,
         CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(searchTerm);
+        ArgumentNullException.ThrowIfNull(searchTerm);
 
         var nameQuery = BuildNameQuery(searchTerm);
-        if (nameQuery is null)
+        var filterClauses = ScryfallFilterQuery.Build(filters);
+        if (nameQuery is null && filterClauses.Count == 0)
         {
             return CardSearchResult.Empty;
         }
 
-        var url = $"cards/search?q={Uri.EscapeDataString(nameQuery)}&unique=cards&order=name&dir=asc";
+        var query = string.Join(' ', filterClauses.Prepend(nameQuery).OfType<string>());
+        var url = $"cards/search?q={Uri.EscapeDataString(query)}&unique=cards&order=name&dir=asc";
+        var canFuzzyMatch = nameQuery is not null && filterClauses.Count == 0;
 
-        // A 404 here means no card name contains the term, which is an empty page, not a failure.
+        // A 404 here means nothing matched the query, which is an empty page, not a failure.
         var result = await GetAsync<ScryfallList>(url, $"card search for '{searchTerm}'", cancellationToken);
         if (result?.Data is not { Count: > 0 } matches)
         {
-            return await FindByFuzzyNameAsync(searchTerm, cancellationToken);
+            return canFuzzyMatch
+                ? await FindByFuzzyNameAsync(searchTerm, cancellationToken)
+                : CardSearchResult.Empty;
         }
 
         var cards = matches

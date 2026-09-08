@@ -6,6 +6,7 @@
  */
 
 import { ApiError } from "@/lib/errors";
+import { NO_FILTERS, type SearchFilters } from "@/lib/search";
 import type { ArtVersion, CardSearchResult, VendorInfo } from "@/lib/types";
 
 /** RFC 9457 problem details, which is how Mtg.Api reports every failure. */
@@ -28,6 +29,22 @@ async function readProblemDetail(response: Response): Promise<string> {
   }
 }
 
+/** The search query string. Filters are sent by id; the API knows what each one means. */
+function searchParams(name: string, filters: SearchFilters): URLSearchParams {
+  const params = new URLSearchParams({ name });
+  if (filters.type !== null) {
+    params.set("type", filters.type);
+  }
+  if (filters.colors.length > 0) {
+    params.set("colors", filters.colors.join(""));
+    params.set("colorMode", filters.colorMode);
+  }
+  for (const trait of filters.landTraits) {
+    params.append("landTraits", trait);
+  }
+  return params;
+}
+
 function createClient(baseUrl: string) {
   async function getJson<T>(path: string): Promise<T> {
     let response: Response;
@@ -45,8 +62,8 @@ function createClient(baseUrl: string) {
   }
 
   return {
-    searchCards: (name: string) =>
-      getJson<CardSearchResult>(`/api/cards/search?name=${encodeURIComponent(name)}`),
+    searchCards: (name: string, filters: SearchFilters = NO_FILTERS) =>
+      getJson<CardSearchResult>(`/api/cards/search?${searchParams(name, filters)}`),
 
     fetchArtVersions: (name: string) =>
       getJson<ArtVersion[]>(`/api/cards/art?name=${encodeURIComponent(name)}`),

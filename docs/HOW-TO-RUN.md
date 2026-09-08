@@ -91,8 +91,20 @@ curl "http://localhost:5000/api/cards/search?name=Delver%20of%20Secrets"
 # Unknown card — 200 with an empty cards array
 curl "http://localhost:5000/api/cards/search?name=asdfqwerzxcv"
 
+# Filtered — blue instants with "bolt" in the name
+curl "http://localhost:5000/api/cards/search?name=bolt&type=instant&colors=U"
+
+# Filter only — every Planet land, no name needed
+curl "http://localhost:5000/api/cards/search?type=land&landTraits=planet"
+
+# Two land traits, both required — the basic Islands
+curl "http://localhost:5000/api/cards/search?type=land&landTraits=basic&landTraits=island"
+
 # Missing name — 400 problem details
 curl "http://localhost:5000/api/cards/search"
+
+# Unknown filter value — 400 problem details
+curl "http://localhost:5000/api/cards/search?type=dragon"
 ```
 
 ## Building the Android app (APK)

@@ -20,6 +20,7 @@ import {
 import { cardAr } from "@/lib/ar";
 import type { ColorMatchMode } from "@/lib/colors";
 import { matchesFinish, priceFor, type Finish } from "@/lib/pricing";
+import { hasFilters, NO_FILTERS, type SearchFilters } from "@/lib/search";
 import type { ArtVersion, Card, CardSearchResult, VendorInfo } from "@/lib/types";
 
 /** The game tracker ships only in the app build, so the web build hides its entry link. */
@@ -35,6 +36,7 @@ const VENDOR_REFRESH_MS = 10 * 60_000;
 
 export default function Home() {
   const [query, setQuery] = useState("");
+  const [filters, setFilters] = useState<SearchFilters>(NO_FILTERS);
   const [results, setResults] = useState<CardSearchResult | null>(null);
   const [card, setCard] = useState<Card | null>(null);
   const [loading, setLoading] = useState(false);
@@ -43,6 +45,8 @@ export default function Home() {
 
   /** The term the current results belong to, so the empty state can quote it back. */
   const [searchedTerm, setSearchedTerm] = useState<string | null>(null);
+  /** Whether those results were filtered, so the empty state does not blame the name alone. */
+  const [searchedFiltered, setSearchedFiltered] = useState(false);
 
   const [artVersions, setArtVersions] = useState<ArtVersion[]>([]);
   const [loadingArt, setLoadingArt] = useState(false);
@@ -202,7 +206,8 @@ export default function Home() {
 
   async function handleSearch() {
     const name = query.trim();
-    if (name === "") {
+    const filtered = hasFilters(filters);
+    if (name === "" && !filtered) {
       return;
     }
 
@@ -224,7 +229,7 @@ export default function Home() {
 
     let found: CardSearchResult;
     try {
-      found = await searchCards(name);
+      found = await searchCards(name, filters);
     } catch (err) {
       if (isCurrent()) {
         setError(err instanceof Error ? err.message : "Something went wrong.");
@@ -239,6 +244,7 @@ export default function Home() {
 
     setResults(found);
     setSearchedTerm(name);
+    setSearchedFiltered(filtered);
     setLoading(false);
 
     // A single match is unambiguous, so skip the pick-list and open it straight away.
@@ -375,6 +381,8 @@ export default function Home() {
               loading={loading}
               onChange={setQuery}
               onSubmit={handleSearch}
+              filters={filters}
+              onFiltersChange={setFilters}
             />
 
             <RandomCardControls
@@ -396,8 +404,11 @@ export default function Home() {
 
             {searchedTerm !== null && results?.cards.length === 0 && (
               <div className="panel rise p-4 sm:p-6 mb-6 sm:mb-8 text-foreground/60">
-                No card name contains &ldquo;{searchedTerm}&rdquo;. Check the spelling, or try a
-                shorter piece of the name.
+                {!searchedFiltered
+                  ? `No card name contains “${searchedTerm}”. Check the spelling, or try a shorter piece of the name.`
+                  : searchedTerm === ""
+                    ? "No card matches the selected filters."
+                    : `No card name containing “${searchedTerm}” matches the selected filters. Try a shorter piece of the name, or loosen a filter.`}
               </div>
             )}
 
