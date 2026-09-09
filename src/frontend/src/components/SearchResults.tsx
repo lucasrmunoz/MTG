@@ -13,6 +13,8 @@ interface SearchResultsProps {
   /** Off in contexts like the commander picker, where a grid of price dashes reads as broken. */
   showPrices?: boolean | undefined;
   onSelect: (card: Card) => void;
+  /** Fires with the card under the pointer or focus, and null when it leaves. */
+  onHover?: ((card: Card | null) => void) | undefined;
 }
 
 /**
@@ -30,6 +32,7 @@ export function SearchResults({
   finish,
   showPrices = true,
   onSelect,
+  onHover,
 }: SearchResultsProps) {
   const truncated = totalMatches > cards.length;
 
@@ -46,7 +49,7 @@ export function SearchResults({
         {truncated
           ? "Showing the first page only — type more of the name to narrow it down."
           : showPrices
-            ? "Pick a card to see its printings and prices."
+            ? "Hover over a card to preview it; pick one to see its printings and prices."
             : "Pick the card you meant."}
       </p>
 
@@ -57,6 +60,10 @@ export function SearchResults({
               key={card.id}
               type="button"
               onClick={() => onSelect(card)}
+              onMouseEnter={() => onHover?.(card)}
+              onMouseLeave={() => onHover?.(null)}
+              onFocus={() => onHover?.(card)}
+              onBlur={() => onHover?.(null)}
               className="tile p-2 text-left"
             >
               {card.imageUrl === null ? (

@@ -56,6 +56,7 @@ internal static class ScryfallCardMapper
             Artist = source.Artist ?? "Unknown Artist",
             ReleasedAt = source.ReleasedAt,
             ImageUrl = imageUrl,
+            BackImageUrl = ResolveBackImageUrl(source),
             ArtCropUrl = ResolveArtCropUrl(source),
             Finishes = source.Finishes ?? [],
             Prices = TcgplayerPrice(source),
@@ -106,4 +107,13 @@ internal static class ScryfallCardMapper
 
     private static ScryfallImageUris? FirstFaceImages(ScryfallCard source) =>
         source.CardFaces?.FirstOrDefault(face => face.ImageUris is not null)?.ImageUris;
+
+    /// <summary>The second face that has its own scan — only double-faced cards have one.</summary>
+    private static string? ResolveBackImageUrl(ScryfallCard source) =>
+        source.CardFaces?
+            .Where(face => face.ImageUris is not null)
+            .Skip(1)
+            .FirstOrDefault()?
+            .ImageUris?
+            .Normal;
 }

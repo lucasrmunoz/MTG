@@ -75,6 +75,8 @@ export interface ArtVersion {
   artist: string;
   releasedAt: string | null;
   imageUrl: string;
+  /** The back face's image for a double-faced printing; null for a single-faced one. */
+  backImageUrl: string | null;
   artCropUrl: string | null;
   finishes: string[];
   prices: Record<string, VendorPrice>;

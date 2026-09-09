@@ -18,6 +18,7 @@ import {
   searchCards,
 } from "@/lib/api";
 import { cardAr } from "@/lib/ar";
+import { backImageUrl } from "@/lib/cards";
 import type { ColorMatchMode } from "@/lib/colors";
 import { matchesFinish, priceFor, type Finish } from "@/lib/pricing";
 import { hasFilters, NO_FILTERS, type SearchFilters } from "@/lib/search";
@@ -39,6 +40,8 @@ export default function Home() {
   const [filters, setFilters] = useState<SearchFilters>(NO_FILTERS);
   const [results, setResults] = useState<CardSearchResult | null>(null);
   const [card, setCard] = useState<Card | null>(null);
+  /** The match under the pointer, previewed until a card is opened. */
+  const [hoveredCard, setHoveredCard] = useState<Card | null>(null);
   const [loading, setLoading] = useState(false);
   const [randomLoading, setRandomLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -52,6 +55,8 @@ export default function Home() {
   const [loadingArt, setLoadingArt] = useState(false);
   const [selectedArtUrl, setSelectedArtUrl] = useState<string | null>(null);
   const [hoveredArtUrl, setHoveredArtUrl] = useState<string | null>(null);
+  /** Whether a double-faced card shows its back. Shared by the detail and the preview. */
+  const [flipped, setFlipped] = useState(false);
 
   const [vendors, setVendors] = useState<VendorInfo[]>([]);
   const [vendorId, setVendorId] = useState("");
@@ -184,6 +189,7 @@ export default function Home() {
     setCard(chosen);
     setSelectedArtUrl(chosen.imageUrl);
     setHoveredArtUrl(null);
+    setFlipped(false);
     setArtVersions([]);
     setLoadingArt(true);
 
@@ -219,6 +225,7 @@ export default function Home() {
     setResults(null);
     setSearchedTerm(null);
     setCard(null);
+    setHoveredCard(null);
     setArtVersions([]);
     // A card selection may still be loading art, or a random card may still be drawing; those
     // responses are discarded by the id check, so the flags they would have cleared reset here.
@@ -264,6 +271,7 @@ export default function Home() {
     setResults(null);
     setSearchedTerm(null);
     setCard(null);
+    setHoveredCard(null);
     setArtVersions([]);
     // Mirrors handleSearch: an interrupted search or art load never clears its own flag, because
     // the id check discards its response.
@@ -326,6 +334,7 @@ export default function Home() {
   function backToResults() {
     requestIdRef.current++;
     setCard(null);
+    setHoveredCard(null);
     setArtVersions([]);
     setLoadingArt(false);
     setSelectedArtUrl(null);
@@ -335,19 +344,39 @@ export default function Home() {
   const visibleVersions = artVersions.filter((version) =>
     matchesFinish(version.finishes, finish),
   );
-  const previewUrl = hoveredArtUrl ?? selectedArtUrl;
+  // The preview follows the open card and its printings; with no card open, it follows whichever
+  // match is under the pointer.
+  const previewCard = card ?? hoveredCard;
+  const previewUrl =
+    card !== null ? (hoveredArtUrl ?? selectedArtUrl) : (hoveredCard?.imageUrl ?? null);
   const previewVersion = artVersions.find((version) => version.imageUrl === previewUrl);
+
+  /**
+   * The back face behind a front-face URL. Art versions carry their own; before they load, the
+   * only known printing is the card's default, whose faces the card itself carries.
+   */
+  function backFaceFor(frontUrl: string | null): string | null {
+    if (frontUrl === null || previewCard === null) {
+      return null;
+    }
+    const version = artVersions.find((candidate) => candidate.imageUrl === frontUrl);
+    if (version !== undefined) {
+      return version.backImageUrl;
+    }
+    return frontUrl === previewCard.imageUrl ? backImageUrl(previewCard) : null;
+  }
+  const toggleFlip = () => setFlipped((current) => !current);
   const previewPrice =
     previewVersion !== undefined
       ? priceFor(previewVersion.prices, vendorId, finish)
-      : card !== null
-        ? priceFor(card.prices, vendorId, finish)
+      : previewCard !== null
+        ? priceFor(previewCard.prices, vendorId, finish)
         : null;
   const previewPrinting =
     previewVersion !== undefined
       ? `${previewVersion.setName} (${previewVersion.setCode.toUpperCase()}) #${previewVersion.collectorNumber}`
-      : card !== null
-        ? `${card.setName} (${card.setCode.toUpperCase()})`
+      : previewCard !== null
+        ? `${previewCard.setName} (${previewCard.setCode.toUpperCase()})`
         : null;
 
   return (
@@ -419,6 +448,7 @@ export default function Home() {
                 vendorId={vendorId}
                 finish={finish}
                 onSelect={(chosen) => void selectCard(chosen)}
+                onHover={setHoveredCard}
               />
             )}
 
@@ -445,6 +475,9 @@ export default function Home() {
                 <CardDetail
                   card={card}
                   imageUrl={selectedArtUrl ?? card.imageUrl}
+                  backImageUrl={backFaceFor(selectedArtUrl ?? card.imageUrl)}
+                  flipped={flipped}
+                  onFlip={toggleFlip}
                   vendors={vendors}
                   vendorId={vendorId}
                   finish={finish}
@@ -472,8 +505,11 @@ export default function Home() {
 
           <div className="w-full lg:w-80 flex-shrink-0">
             <PreviewPanel
-              imageUrl={card === null ? null : previewUrl}
-              label={card?.name ?? ""}
+              imageUrl={previewUrl}
+              backImageUrl={backFaceFor(previewUrl)}
+              flipped={flipped}
+              onFlip={toggleFlip}
+              label={previewCard?.name ?? ""}
               price={previewPrice}
               printing={previewPrinting}
               vendors={vendors}

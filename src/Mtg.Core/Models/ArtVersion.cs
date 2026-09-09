@@ -27,6 +27,9 @@ public sealed record ArtVersion
     /// <summary>Full card image at Scryfall's "normal" size.</summary>
     public required string ImageUrl { get; init; }
 
+    /// <summary>The back face's image for a double-faced printing; null for a single-faced one.</summary>
+    public string? BackImageUrl { get; init; }
+
     /// <summary>Cropped artwork without the card frame, suitable for thumbnails.</summary>
     public string? ArtCropUrl { get; init; }
 

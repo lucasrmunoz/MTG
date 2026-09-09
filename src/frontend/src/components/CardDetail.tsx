@@ -1,6 +1,6 @@
 "use client";
 
-import { CardImage } from "@/components/CardImage";
+import { FlippableCardImage } from "@/components/FlippableCardImage";
 import { KeywordChip } from "@/components/KeywordChip";
 import { powerToughness, primaryType } from "@/lib/cards";
 import { formatPrice, priceFor, vendorLabel, type Finish } from "@/lib/pricing";
@@ -10,6 +10,10 @@ interface CardDetailProps {
   card: Card;
   /** The art the user picked, falling back to the card's default printing. */
   imageUrl: string | null;
+  /** That printing's back face, when it has one. */
+  backImageUrl: string | null;
+  flipped: boolean;
+  onFlip: () => void;
   vendors: VendorInfo[];
   vendorId: string;
   finish: Finish;
@@ -29,6 +33,9 @@ function DetailRow({ label, children }: { label: string; children: React.ReactNo
 export function CardDetail({
   card,
   imageUrl,
+  backImageUrl,
+  flipped,
+  onFlip,
   vendors,
   vendorId,
   finish,
@@ -46,8 +53,11 @@ export function CardDetail({
             <span className="text-foreground/40 text-sm">No image available</span>
           </div>
         ) : (
-          <CardImage
-            src={imageUrl}
+          <FlippableCardImage
+            frontUrl={imageUrl}
+            backUrl={backImageUrl}
+            flipped={flipped}
+            onFlip={onFlip}
             alt={card.name}
             width={300}
             height={418}

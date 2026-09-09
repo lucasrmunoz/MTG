@@ -112,6 +112,12 @@ function artCropUrl(card: ScryfallCard): string | null {
   return card.image_uris?.art_crop ?? firstFaceImages(card)?.art_crop ?? null;
 }
 
+/** The second face that has its own scan — only double-faced cards have one. */
+function backImageUrl(card: ScryfallCard): string | null {
+  const faces = card.card_faces?.filter((face) => face.image_uris !== undefined) ?? [];
+  return faces[1]?.image_uris?.normal ?? null;
+}
+
 /** Scryfall quotes prices as decimal strings and omits them entirely when unknown. */
 function parsePrice(value: string | null | undefined): number | null {
   if (value === null || value === undefined) {
@@ -185,6 +191,7 @@ function toArtVersion(source: ScryfallCard): ArtVersion | null {
     artist: source.artist ?? "Unknown Artist",
     releasedAt: source.released_at ?? null,
     imageUrl: image,
+    backImageUrl: backImageUrl(source),
     artCropUrl: artCropUrl(source),
     finishes: source.finishes ?? [],
     prices: tcgplayerPrices(source),

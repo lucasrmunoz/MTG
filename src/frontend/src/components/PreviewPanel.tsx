@@ -1,12 +1,16 @@
 "use client";
 
-import { CardImage } from "@/components/CardImage";
+import { FlippableCardImage } from "@/components/FlippableCardImage";
 import { formatPrice, vendorLabel, type Finish } from "@/lib/pricing";
 import type { VendorInfo } from "@/lib/types";
 
 interface PreviewPanelProps {
   /** Full-size art to show; null renders the empty state. */
   imageUrl: string | null;
+  /** That printing's back face, when it has one. */
+  backImageUrl: string | null;
+  flipped: boolean;
+  onFlip: () => void;
   label: string;
   price: number | null;
   /** Set and collector number of the previewed printing, when one is selected. */
@@ -22,6 +26,9 @@ interface PreviewPanelProps {
  */
 export function PreviewPanel({
   imageUrl,
+  backImageUrl,
+  flipped,
+  onFlip,
   label,
   price,
   printing,
@@ -37,7 +44,7 @@ export function PreviewPanel({
 
       {imageUrl === null ? (
         <p className="text-foreground/40 text-sm text-center py-8">
-          Search for a card to preview its artwork.
+          Search for a card, then hover over a match to preview it.
         </p>
       ) : (
         <>
@@ -52,8 +59,11 @@ export function PreviewPanel({
             <p className="text-foreground/50 text-xs mb-3 truncate">{printing}</p>
           )}
 
-          <CardImage
-            src={imageUrl}
+          <FlippableCardImage
+            frontUrl={imageUrl}
+            backUrl={backImageUrl}
+            flipped={flipped}
+            onFlip={onFlip}
             alt={label}
             width={288}
             height={401}
