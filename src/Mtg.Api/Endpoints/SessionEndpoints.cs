@@ -236,16 +236,18 @@ internal static class SessionEndpoints
         }
     }
 
-    private static async Task BroadcastAsync(GameSession session, string message)
-    {
-        foreach (var guest in session.GuestsSnapshot())
+    /// <summary>
+    /// Sends to every guest at once, so one hung phone costs the table a single send timeout
+    /// rather than one per guest; each socket serialises its own sends, so this is safe.
+    /// </summary>
+    private static Task BroadcastAsync(GameSession session, string message) =>
+        Task.WhenAll(session.GuestsSnapshot().Select(async guest =>
         {
             if (!await guest.TrySendTextAsync(message))
             {
                 session.RemoveGuest(guest);
             }
-        }
-    }
+        }));
 
     private static async Task NotifyHostAsync(GameSession session, string message)
     {
