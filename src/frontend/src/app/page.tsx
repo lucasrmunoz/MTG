@@ -27,6 +27,9 @@ import type { ArtVersion, Card, CardSearchResult, VendorInfo } from "@/lib/types
 /** The game tracker ships only in the app build, so the web build hides its entry link. */
 const isMobileApp = process.env.NEXT_PUBLIC_MOBILE_APP === "true";
 
+/** How long a transient notice stays on screen before it dismisses itself. */
+const NOTICE_MS = 8000;
+
 /**
  * How often to re-read vendor metadata. Without this the "as of Xm ago" label would age forever
  * from the first fetch; each poll also re-renders, which is what keeps the minute count itself
@@ -62,10 +65,20 @@ export default function Home() {
   const [vendorId, setVendorId] = useState("");
   const [finish, setFinish] = useState<Finish>("all");
   const [refreshingPrices, setRefreshingPrices] = useState(false);
+  /** A toast for something that worked with a caveat, such as a price list that arrived short. */
+  const [notice, setNotice] = useState<string | null>(null);
 
   // Identifies the in-flight search or card selection, so a slow response from an earlier one
   // cannot overwrite the results of a later one.
   const requestIdRef = useRef(0);
+
+  useEffect(() => {
+    if (notice === null) {
+      return;
+    }
+    const timer = setTimeout(() => setNotice(null), NOTICE_MS);
+    return () => clearTimeout(timer);
+  }, [notice]);
 
   // Loads the vendor list once at startup, then re-reads it on a slow cadence so the freshness
   // label stays current. Cached catalogues load on demand (see the vendorId effect below), which
@@ -132,8 +145,9 @@ export default function Home() {
 
     let cancelled = false;
     void (async () => {
+      let loadNotice: string | null;
       try {
-        await cachedVendors.ensure(vendorId);
+        loadNotice = await cachedVendors.ensure(vendorId);
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : "Could not load vendor prices.");
@@ -147,6 +161,9 @@ export default function Home() {
         return;
       }
       restampCachedPrices();
+      if (loadNotice !== null) {
+        setNotice(loadNotice);
+      }
       try {
         const list = await fetchVendors();
         if (!cancelled) {
@@ -170,10 +187,11 @@ export default function Home() {
 
     setRefreshingPrices(true);
     try {
-      await cachedVendors.refresh(vendorId);
+      const refreshNotice = await cachedVendors.refresh(vendorId);
       restampCachedPrices();
       setVendors(await fetchVendors());
       setError(null);
+      setNotice(refreshNotice);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not refresh vendor prices.");
     } finally {
@@ -523,6 +541,12 @@ export default function Home() {
           <KeywordsSection />
         </div>
       </div>
+
+      {notice !== null && (
+        <div role="status" className="toast rise">
+          {notice}
+        </div>
+      )}
     </div>
   );
 }

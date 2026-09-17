@@ -39,6 +39,17 @@ const PERSIST_CHUNK_CHARS = 1 << 20;
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 /**
+ * How many downloads are attempted when the stream keeps ending before the document closes. The
+ * last attempt's rows are kept even if still short: a mostly-complete list beats none, and the
+ * caller is told so it can say so.
+ */
+const MAX_TRUNCATED_ATTEMPTS = 5;
+
+const TRUNCATED_NOTICE =
+  `Card Kingdom's price list arrived incomplete after ${MAX_TRUNCATED_ATTEMPTS} tries. ` +
+  "Some cards may show no Card Kingdom price until the next refresh.";
+
+/**
  * Standard UUID, any version. Roughly 700 feed rows carry something else — null for Card
  * Kingdom's own tokens, bare numbers, at least one truncated GUID — and are skipped, mirroring
  * the C# feed's Guid.TryParse guard.
@@ -51,7 +62,7 @@ let catalogue: Map<string, VendorPrice> | null = null;
 let fetchedAt: string | null = null;
 
 /** Single-flight guard so a manual refresh cannot race an on-demand load into two downloads. */
-let inFlight: Promise<void> | null = null;
+let inFlight: Promise<string | null> | null = null;
 
 /**
  * First line of the cache file. The lines after it are `[printingId, VendorPrice]` tuples, one
@@ -130,6 +141,15 @@ class RowScanner {
 
     return rows;
   }
+
+  /**
+   * True once the whole document has been consumed: the root object closed and nothing is left
+   * open. Depth alone is enough — a cut inside a row or a string leaves depth ≥ 2, and a cut
+   * between rows leaves depth 1 with the data array still open.
+   */
+  isComplete(): boolean {
+    return this.depth === 0;
+  }
 }
 
 /**
@@ -175,8 +195,8 @@ function addRow(rowText: string, prices: Map<string, VendorPrice>): void {
   );
 }
 
-/** Downloads and parses the catalogue, then replaces both the in-memory map and the cache file. */
-async function download(): Promise<void> {
+/** One pass over the feed. `complete` is false when the stream ended before the document closed. */
+async function readCatalogue(): Promise<{ prices: Map<string, VendorPrice>; complete: boolean }> {
   let response: Response;
   try {
     response = await fetch(FEED_URL, { headers: { Accept: "application/json" } });
@@ -219,6 +239,27 @@ async function download(): Promise<void> {
     addRow(rowText, prices);
   }
 
+  // A clean `done` before the root object closes means a proxy or CDN cut the body short without
+  // a read error; the rows parsed so far are the head of the list with an unknown-sized tail gone.
+  return { prices, complete: scanner.isComplete() };
+}
+
+/**
+ * Downloads and parses the catalogue, then replaces both the in-memory map and the cache file.
+ * A stream that ends short is re-tried up to MAX_TRUNCATED_ATTEMPTS times; if every attempt
+ * comes up short the last one is kept anyway, and the returned notice says so. Null when the
+ * catalogue arrived whole.
+ */
+async function download(): Promise<string | null> {
+  let read = await readCatalogue();
+  for (let attempt = 1; !read.complete && attempt < MAX_TRUNCATED_ATTEMPTS; attempt++) {
+    console.warn(
+      `Card Kingdom feed ended short (attempt ${attempt} of ${MAX_TRUNCATED_ATTEMPTS}); retrying.`,
+    );
+    read = await readCatalogue();
+  }
+  const prices = read.prices;
+
   if (prices.size === 0) {
     throw new ApiError("The Card Kingdom price feed held no usable prices.", 0);
   }
@@ -238,6 +279,8 @@ async function download(): Promise<void> {
       // Never got created.
     }
   }
+
+  return read.complete ? null : TRUNCATED_NOTICE;
 }
 
 /**
@@ -349,14 +392,15 @@ export function priceFor(printingId: string): VendorPrice | undefined {
 /**
  * Makes the catalogue available, preferring memory, then the cache file, then the network. A
  * stale copy is still served when a re-download fails — prices from this morning beat no prices —
- * but a first-ever load with no network surfaces its error to the caller.
+ * but a first-ever load with no network surfaces its error to the caller. Resolves to a notice
+ * worth showing the user when the load succeeded with a caveat, else null.
  */
-export function ensureLoaded(): Promise<void> {
+export function ensureLoaded(): Promise<string | null> {
   if (inFlight !== null) {
     return inFlight;
   }
   if (catalogue !== null && !isStale()) {
-    return Promise.resolve();
+    return Promise.resolve(null);
   }
 
   inFlight = (async () => {
@@ -364,15 +408,16 @@ export function ensureLoaded(): Promise<void> {
       await loadFromDisk();
     }
     if (catalogue !== null && !isStale()) {
-      return;
+      return null;
     }
     try {
-      await download();
+      return await download();
     } catch (err) {
       if (catalogue === null) {
         throw err;
       }
       console.warn("Card Kingdom refresh failed; keeping the stale catalogue.", err);
+      return null;
     }
   })().finally(() => {
     inFlight = null;
@@ -383,9 +428,9 @@ export function ensureLoaded(): Promise<void> {
 
 /**
  * Downloads the catalogue again right now, replacing the single cached copy. Joins any download
- * already in flight rather than starting a second one.
+ * already in flight rather than starting a second one. Resolves like ensureLoaded.
  */
-export function refresh(): Promise<void> {
+export function refresh(): Promise<string | null> {
   if (inFlight !== null) {
     return inFlight;
   }

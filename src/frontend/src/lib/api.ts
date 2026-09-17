@@ -49,9 +49,12 @@ export const fetchRandomCard = isMobileApp ? nativeApp.fetchRandomCard : scryfal
  */
 export const cachedVendors = isMobileApp
   ? {
-      /** Loads the vendor's catalogue if missing or stale. Called when the vendor is selected. */
+      /**
+       * Loads the vendor's catalogue if missing or stale. Called when the vendor is selected.
+       * Resolves to a notice to show the user when the load succeeded with a caveat, else null.
+       */
       ensure: nativeApp.ensureVendorLoaded,
-      /** Re-downloads the catalogue right now, replacing the single cached copy. */
+      /** Re-downloads the catalogue now, replacing the single cached copy. Resolves like ensure. */
       refresh: nativeApp.refreshVendor,
       /** Merges cached prices into already-fetched items after a load or refresh. */
       apply: nativeApp.applyCachedPrices,

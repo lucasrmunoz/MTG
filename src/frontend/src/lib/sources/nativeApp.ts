@@ -112,16 +112,22 @@ export function fetchVendors(): Promise<VendorInfo[]> {
 /**
  * Loads a cached vendor's catalogue if it is missing or stale. On demand: the page calls this
  * when the user selects the vendor, never at startup, so the 66 MB download never runs unasked.
+ * Resolves to a notice for the user when the load succeeded with a caveat, else null.
  */
-export async function ensureVendorLoaded(vendorId: string): Promise<void> {
+export async function ensureVendorLoaded(vendorId: string): Promise<string | null> {
   if (vendorId === CARD_KINGDOM) {
-    await cardKingdom.ensureLoaded();
+    return cardKingdom.ensureLoaded();
   }
+  return null;
 }
 
-/** Forces a fresh catalogue download right now, replacing the single cached copy. */
-export async function refreshVendor(vendorId: string): Promise<void> {
+/**
+ * Forces a fresh catalogue download right now, replacing the single cached copy. Resolves like
+ * ensureVendorLoaded.
+ */
+export async function refreshVendor(vendorId: string): Promise<string | null> {
   if (vendorId === CARD_KINGDOM) {
-    await cardKingdom.refresh();
+    return cardKingdom.refresh();
   }
+  return null;
 }
