@@ -105,6 +105,14 @@ public sealed class ScryfallClient(HttpClient httpClient, ILogger<ScryfallClient
     }
 
     /// <summary>
+    /// Strips the characters that cannot appear inside a quoted Scryfall term. The parser has no
+    /// escape sequence for quotes or backslashes, so stripping is the only way to keep the query
+    /// well-formed.
+    /// </summary>
+    private static string StripUnquotable(string text) =>
+        text.Replace("\"", "", StringComparison.Ordinal).Replace("\\", "", StringComparison.Ordinal);
+
+    /// <summary>
     /// Turns a search term into a Scryfall query of ANDed <c>name:</c> clauses, one per word.
     /// </summary>
     /// <remarks>
@@ -118,8 +126,7 @@ public sealed class ScryfallClient(HttpClient httpClient, ILogger<ScryfallClient
     {
         var clauses = searchTerm
             .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(word => word.Replace("\"", "", StringComparison.Ordinal)
-                                .Replace("\\", "", StringComparison.Ordinal))
+            .Select(StripUnquotable)
             .Where(word => word.Length > 0)
             .Select(word => $"name:\"{word}\"")
             .ToList();
@@ -155,7 +162,7 @@ public sealed class ScryfallClient(HttpClient httpClient, ILogger<ScryfallClient
         ArgumentException.ThrowIfNullOrWhiteSpace(cardName);
 
         var operation = $"art lookup for '{cardName}'";
-        var query = Uri.EscapeDataString($"!\"{cardName}\"");
+        var query = Uri.EscapeDataString($"!\"{StripUnquotable(cardName)}\"");
         string? url = $"cards/search?q={query}&unique=art&order=released&dir=asc";
 
         var versions = new List<ArtVersion>();

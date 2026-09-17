@@ -199,6 +199,14 @@ function toArtVersion(source: ScryfallCard): ArtVersion | null {
 }
 
 /**
+ * Strips the characters that cannot appear inside a quoted Scryfall term: the parser has no escape
+ * sequence for quotes or backslashes, so stripping is the only way to keep the query well-formed.
+ */
+function stripUnquotable(text: string): string {
+  return text.replaceAll('"', "").replaceAll("\\", "");
+}
+
+/**
  * Turns a search term into a Scryfall query of ANDed `name:` clauses, one per word.
  *
  * Each word is quoted so punctuation carries through — `name:"Urza's"` works, and a leading hyphen
@@ -210,7 +218,7 @@ function toArtVersion(source: ScryfallCard): ArtVersion | null {
 function buildNameQuery(term: string): string | null {
   const clauses = term
     .split(/\s+/)
-    .map((word) => word.replaceAll('"', "").replaceAll("\\", ""))
+    .map(stripUnquotable)
     .filter((word) => word !== "")
     .map((word) => `name:"${word}"`);
 
@@ -333,7 +341,7 @@ export async function fetchRandomCard(
 }
 
 export async function fetchArtVersions(name: string): Promise<ArtVersion[]> {
-  const query = encodeURIComponent(`!"${name}"`);
+  const query = encodeURIComponent(`!"${stripUnquotable(name)}"`);
   let url: string | null = `${SCRYFALL}/cards/search?q=${query}&unique=art&order=released&dir=asc`;
 
   const versions: ArtVersion[] = [];
