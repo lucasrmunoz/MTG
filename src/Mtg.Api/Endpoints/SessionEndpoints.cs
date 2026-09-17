@@ -183,20 +183,21 @@ internal static class SessionEndpoints
         SessionConnection connection,
         CancellationToken aborted)
     {
-        var (guestCount, cachedState, hostPresent) = session.AddGuest(connection);
         try
         {
-            if (!await connection.TrySendTextAsync("""{"type":"joined"}"""))
+            // Admission happens inside the welcome send so it shares the socket's send lock: once
+            // this guest is in the list a host publish may broadcast to it, and that broadcast must
+            // queue behind `joined` and the cached state or the guest could show an older board.
+            var guestCount = 0;
+            var welcomed = await connection.TrySendTextAsync(() =>
+            {
+                var (count, cachedState, hostPresent) = session.AddGuest(connection);
+                guestCount = count;
+                return WelcomeFrames(cachedState, hostPresent);
+            });
+            if (!welcomed)
             {
                 return;
-            }
-            if (cachedState is not null)
-            {
-                await connection.TrySendTextAsync(cachedState);
-            }
-            if (!hostPresent)
-            {
-                await connection.TrySendTextAsync("""{"type":"host-gone"}""");
             }
             await NotifyHostAsync(session, PresenceMessage(guestCount));
 
@@ -256,6 +257,20 @@ internal static class SessionEndpoints
         {
             await host.TrySendTextAsync(message);
         }
+    }
+
+    private static List<string> WelcomeFrames(string? cachedState, bool hostPresent)
+    {
+        List<string> frames = ["""{"type":"joined"}"""];
+        if (cachedState is not null)
+        {
+            frames.Add(cachedState);
+        }
+        if (!hostPresent)
+        {
+            frames.Add("""{"type":"host-gone"}""");
+        }
+        return frames;
     }
 
     private static string PresenceMessage(int guestCount) =>

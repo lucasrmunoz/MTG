@@ -21,14 +21,21 @@ internal sealed class SessionConnection(WebSocket socket)
     /// an expected outcome the caller prunes, never an exception that tears down another loop.
     /// </summary>
     public Task<bool> TrySendTextAsync(string message) =>
-        TrySendAsync(Encoding.UTF8.GetBytes(message), WebSocketMessageType.Text);
+        TrySendTextAsync(() => [message]);
 
-    private async Task<bool> TrySendAsync(byte[] payload, WebSocketMessageType messageType)
+    /// <summary>
+    /// Sends the frames <paramref name="compose"/> produces, holding this socket's send lock from
+    /// before it runs until the last frame is out. Anything <paramref name="compose"/> does that
+    /// makes this socket a broadcast target — joining a session — therefore cannot let a
+    /// concurrent broadcast land ahead of, or between, the frames it composed. False on the
+    /// first frame that fails, as for a single send.
+    /// </summary>
+    public async Task<bool> TrySendTextAsync(Func<IReadOnlyList<string>> compose)
     {
-        using var timeout = new CancellationTokenSource(SendTimeout);
+        using var lockTimeout = new CancellationTokenSource(SendTimeout);
         try
         {
-            await _sendLock.WaitAsync(timeout.Token);
+            await _sendLock.WaitAsync(lockTimeout.Token);
         }
         catch (OperationCanceledException)
         {
@@ -37,10 +44,31 @@ internal sealed class SessionConnection(WebSocket socket)
 
         try
         {
-            if (Socket.State != WebSocketState.Open)
+            foreach (var message in compose())
             {
-                return false;
+                if (!await SendLockedAsync(Encoding.UTF8.GetBytes(message), WebSocketMessageType.Text))
+                {
+                    return false;
+                }
             }
+            return true;
+        }
+        finally
+        {
+            _sendLock.Release();
+        }
+    }
+
+    /// <summary>One frame, with the send lock already held by the caller.</summary>
+    private async Task<bool> SendLockedAsync(byte[] payload, WebSocketMessageType messageType)
+    {
+        if (Socket.State != WebSocketState.Open)
+        {
+            return false;
+        }
+        using var timeout = new CancellationTokenSource(SendTimeout);
+        try
+        {
             await Socket.SendAsync(payload, messageType, endOfMessage: true, timeout.Token);
             return true;
         }
@@ -48,10 +76,6 @@ internal sealed class SessionConnection(WebSocket socket)
             ex is WebSocketException or OperationCanceledException or ObjectDisposedException or InvalidOperationException)
         {
             return false;
-        }
-        finally
-        {
-            _sendLock.Release();
         }
     }
 }
